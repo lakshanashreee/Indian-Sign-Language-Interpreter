@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Indian Sign Language (ISL) Interpreter</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-icon">🤟</div>
+        <div>
+          <h1 class="logo-title">ISL Interpreter <span class="badge-tag">AI Powered</span></h1>
+          <p class="logo-subtitle">Real-Time Indian Sign Language Translation &bull; Hand-Face Separation &bull; 96.4% Acc</p>
+        </div>
+      </div>
+      <div class="header-actions">
+        <div class="status-pill" id="modelStatusPill">
+          <span class="status-dot"></span>
+          <span id="modelStatusText">Model Ready (26 Classes)</span>
+        </div>
+        <button class="btn btn-secondary" id="btnOpenGuide">
+          <span>📖</span> ISL Guide
+        </button>
+        <button class="btn btn-secondary" id="btnToggleTTS">
+          <span id="ttsIcon">🔊</span> <span id="ttsText">Voice: ON</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace -->
+    <main class="main-workspace">
+      <!-- Left Column: Camera & Computer Vision Station -->
+      <section class="camera-card">
+        <div class="card-header">
+          <div class="card-title">
+            <span>📹</span> Live Video Stream
+          </div>
+          <div class="stream-indicators">
+            <span class="badge" id="detectionBadge">⚪ Camera Off</span>
+            <span class="badge badge-info" id="fpsBadge">0 FPS</span>
+          </div>
+        </div>
+
+        <!-- Video & Canvas Viewport -->
+        <div class="viewport-wrapper">
+          <video id="videoElement" autoplay playsinline muted></video>
+          <canvas id="overlayCanvas"></canvas>
+          <div class="camera-overlay-placeholder" id="cameraPlaceholder">
+            <div class="placeholder-content">
+              <div class="placeholder-icon">📷</div>
+              <h3>Camera is Turned Off</h3>
+              <p>Click "Turn On Camera" below to start real-time Indian Sign Language interpretation.</p>
+              <button class="btn btn-primary" id="btnPlaceholderStartCam">Turn On Camera</button>
+            </div>
+          </div>
+          <!-- Framing Target Box overlay -->
+          <div class="framing-box" id="framingBox">
+            <div class="framing-label">Sign Framing Zone</div>
+          </div>
+        </div>
+
+        <!-- Camera Controls Toolbar -->
+        <div class="camera-toolbar">
+          <button class="btn btn-primary" id="btnToggleCamera">
+            <span id="camBtnIcon">▶️</span> <span id="camBtnText">Turn On Camera</span>
+          </button>
+          <button class="btn btn-secondary" id="btnToggleSkeleton">
+            <span>🦴</span> Skeleton: ON
+          </button>
+          <button class="btn btn-secondary" id="btnToggleBox">
+            <span>🎯</span> Guide Box: ON
+          </button>
+          <button class="btn btn-secondary" id="btnFlipCam">
+            <span>🔄</span> Mirror
+          </button>
+        </div>
+
+        <!-- Vision HUD: Hand Isolation from Body & Predictions -->
+        <div class="vision-hud-grid">
+          <!-- Human & Face Separation Panel -->
+          <div class="hud-box">
+            <div class="hud-box-header">
+              <span>Hand Isolation Monitor</span>
+              <span class="badge badge-success" id="isolationState">Face Filtered</span>
+            </div>
+            <div class="isolation-preview-row">
+              <div class="crop-preview-box">
+                <img id="cropPreviewImg" src="/static/placeholder_hand.png" alt="Isolated Hand Crop">
+                <div class="crop-caption">Body & Face Removed</div>
+              </div>
+              <div class="isolation-details">
+                <div class="metric-row">
+                  <span class="label">Hands Detected:</span>
+                  <span class="val" id="handsCountVal">0</span>
+                </div>
+                <div class="metric-row">
+                  <span class="label">Detection Mode:</span>
+                  <span class="val highlight">MediaPipe 3D</span>
+                </div>
+                <div class="metric-row">
+                  <span class="label">Hand Tracking:</span>
+                  <span class="val" id="trackingStatus">Active</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-Time Sign Prediction Hero Box -->
+          <div class="hud-box prediction-hero">
+            <div class="hud-box-header">
+              <span>Live Recognition</span>
+              <span class="conf-badge" id="confBadge">0.0%</span>
+            </div>
+            <div class="hero-letter-row">
+              <div class="hero-letter" id="heroLetter">-</div>
+              <div class="hero-letter-meta">
+                <div class="meta-title" id="letterName">Awaiting Sign...</div>
+                <div class="confidence-bar-wrapper">
+                  <div class="confidence-bar" id="confidenceBar" style="width: 0%;"></div>
+                </div>
+                <div class="top3-row" id="top3Row">
+                  <span class="top3-pill">-</span>
+                  <span class="top3-pill">-</span>
+                  <span class="top3-pill">-</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Column: Interactive Modes Workspace -->
+      <section class="modes-card">
+        <!-- Mode Tabs -->
+        <div class="mode-tabs">
+          <button class="mode-tab active" data-mode="alphabet">
+            <span class="tab-icon">🔤</span> Alphabet Mode
+          </button>
+          <button class="mode-tab" data-mode="word">
+            <span class="tab-icon">📝</span> Word Mode
+          </button>
+          <button class="mode-tab" data-mode="sentence">
+            <span class="tab-icon">💬</span> Sentence Mode
+          </button>
+        </div>
+
+        <!-- Tab 1: Alphabet Mode View -->
+        <div class="tab-pane active" id="paneAlphabet">
+          <div class="pane-intro">
+            <h3>Alphabet Interpreter</h3>
+            <p>Perform any Indian Sign Language alphabet gesture. The system automatically tracks your hands, separates your face and body, and interprets the sign cleanly.</p>
+          </div>
+
+          <div class="alphabet-live-card">
+            <div class="live-card-badge">Current Sign</div>
+            <div class="big-alphabet-display" id="bigAlphaDisplay">?</div>
+            <div class="alphabet-desc" id="bigAlphaDesc">Make a sign with your hand in camera view</div>
+            <div class="alphabet-actions">
+              <button class="btn btn-primary" id="btnSpeakAlpha">
+                <span>🔊</span> Speak Alphabet
+              </button>
+              <button class="btn btn-secondary" id="btnCopyAlpha">
+                <span>📋</span> Copy
+              </button>
+            </div>
+          </div>
+
+          <!-- Recent Alphabet History Stream -->
+          <div class="history-section">
+            <div class="section-title-row">
+              <h4>Recent Stream History</h4>
+              <button class="btn-link" id="btnClearAlphaHistory">Clear Stream</button>
+            </div>
+            <div class="history-chips-container" id="alphaHistoryContainer">
+              <span class="history-empty">Signs will appear here as you perform them...</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 2: Word Mode View -->
+        <div class="tab-pane" id="paneWord">
+          <div class="pane-intro">
+            <h3>Word Builder Mode</h3>
+            <p>Specify the number of alphabets in your target word. Make the symbol for each slot, confirm or click "Next Letter", and assemble the complete word.</p>
+          </div>
+
+          <!-- Word Setup Form -->
+          <div class="config-box" id="wordConfigBox">
+            <label class="form-label" for="numLettersInput">Enter Number of Alphabets in Word:</label>
+            <div class="input-with-button">
+              <input type="number" id="numLettersInput" min="1" max="15" value="4" class="form-input">
+              <button class="btn btn-primary" id="btnInitWord">Set Word Length</button>
+            </div>
+            <div class="quick-presets">
+              <span>Quick Presets:</span>
+              <button class="preset-pill" data-len="3">3 Letters</button>
+              <button class="preset-pill" data-len="4">4 Letters</button>
+              <button class="preset-pill" data-len="5">5 Letters</button>
+              <button class="preset-pill" data-len="6">6 Letters</button>
+            </div>
+          </div>
+
+          <!-- Interactive Slots Grid -->
+          <div class="word-slots-section" id="wordSlotsSection">
+            <div class="slots-header">
+              <span class="active-slot-indicator" id="activeSlotIndicator">Active: Slot 1 of 4</span>
+              <span class="shortcut-hint">Tip: Press <strong>Spacebar</strong> for Next Letter</span>
+            </div>
+            <div class="slots-container" id="wordSlotsContainer">
+              <!-- Dynamically populated letter slot cards -->
+            </div>
+
+            <!-- Active Slot Interpreter HUD -->
+            <div class="slot-interpreter-hud">
+              <div class="interpreter-live-info">
+                <span class="hud-label">Currently Interpreting for Current Slot:</span>
+                <span class="hud-value" id="slotInterpretingVal">-</span>
+                <span class="hud-conf" id="slotInterpretingConf">(--%)</span>
+              </div>
+              <div class="slot-action-buttons">
+                <button class="btn btn-primary btn-large" id="btnNextLetter">
+                  <span>➡️</span> Next Letter (Save Slot)
+                </button>
+                <button class="btn btn-secondary" id="btnPrevLetter">
+                  <span>⬅️</span> Previous Letter
+                </button>
+                <button class="btn btn-danger-outline" id="btnResetWord">
+                  <span>🔄</span> Reset
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Assembled Word Result Card -->
+          <div class="result-card" id="wordResultCard" style="display: none;">
+            <div class="result-header">🎉 Word Successfully Assembled!</div>
+            <div class="result-word" id="assembledWordDisplay">SIGN</div>
+            <div class="result-actions">
+              <button class="btn btn-primary" id="btnSpeakWord">
+                <span>🔊</span> Pronounce Word
+              </button>
+              <button class="btn btn-secondary" id="btnCopyWord">
+                <span>📋</span> Copy Word
+              </button>
+              <button class="btn btn-accent" id="btnAddWordToSentence">
+                <span>💬</span> Send to Sentence Mode
+              </button>
+              <button class="btn btn-secondary" id="btnNewWord">
+                <span>✨</span> Build Another Word
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tab 3: Sentence Mode View -->
+        <div class="tab-pane" id="paneSentence">
+          <div class="pane-intro">
+            <h3>Sentence Builder Mode</h3>
+            <p>Construct complete sentences word-by-word. Specify the number of words, spell each word letter-by-letter with "Next Letter", and advance to the next word!</p>
+          </div>
+
+          <!-- Sentence Setup Form -->
+          <div class="config-box" id="sentenceConfigBox">
+            <label class="form-label" for="numWordsInput">Enter Number of Words in Sentence:</label>
+            <div class="input-with-button">
+              <input type="number" id="numWordsInput" min="1" max="10" value="3" class="form-input">
+              <button class="btn btn-primary" id="btnInitSentence">Initialize Sentence</button>
+            </div>
+            <div class="quick-presets">
+              <span>Quick Presets:</span>
+              <button class="preset-pill-sentence" data-words="2">2 Words</button>
+              <button class="preset-pill-sentence" data-words="3">3 Words</button>
+              <button class="preset-pill-sentence" data-words="4">4 Words</button>
+            </div>
+          </div>
+
+          <!-- Sentence Workspace -->
+          <div class="sentence-workspace" id="sentenceWorkspace" style="display: none;">
+            <!-- Words Breadcrumb Bar -->
+            <div class="words-breadcrumb-bar" id="wordsBreadcrumbBar">
+              <!-- Dynamically populated word pills -->
+            </div>
+
+            <!-- Active Word Letter Builder Card -->
+            <div class="active-word-builder-card">
+              <div class="builder-card-header">
+                <span id="activeWordTitle">Editing Word 1 of 3</span>
+                <span class="sub-badge" id="wordLetterCountBadge">Letters: 0</span>
+              </div>
+
+              <!-- Word Letter Slots -->
+              <div class="sentence-letter-slots" id="sentenceLetterSlots">
+                <!-- Dynamically generated letter slots for current word -->
+              </div>
+
+              <!-- Current Letter Interpreting HUD -->
+              <div class="slot-interpreter-hud">
+                <div class="interpreter-live-info">
+                  <span class="hud-label">Live Interpretation for Current Letter:</span>
+                  <span class="hud-value" id="sentenceInterpretingVal">-</span>
+                </div>
+                <div class="slot-action-buttons">
+                  <button class="btn btn-primary" id="btnSentenceNextLetter">
+                    <span>➡️</span> Next Letter
+                  </button>
+                  <button class="btn btn-secondary" id="btnSentenceBackLetter">
+                    <span>⬅️</span> Back Letter
+                  </button>
+                  <button class="btn btn-accent" id="btnCompleteWordNext">
+                    <span>✅</span> Complete Word & Next Word ➡️
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Live Full Sentence Display -->
+            <div class="assembled-sentence-card">
+              <div class="sentence-card-header">
+                <span>Assembled Sentence Output</span>
+                <span class="char-count" id="sentenceCharCount">0 characters</span>
+              </div>
+              <div class="full-sentence-box" id="fullSentenceDisplay">
+                Your sentence will appear here as words are completed...
+              </div>
+              <div class="sentence-action-row">
+                <button class="btn btn-primary" id="btnSpeakSentence">
+                  <span>🔊</span> Speak Sentence
+                </button>
+                <button class="btn btn-secondary" id="btnCopySentence">
+                  <span>📋</span> Copy Sentence
+                </button>
+                <button class="btn btn-danger-outline" id="btnResetSentence">
+                  <span>🔄</span> Reset Sentence
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ISL Alphabet Guide Modal -->
+    <div class="modal-backdrop" id="guideModal">
+      <div class="modal-window">
+        <div class="modal-header">
+          <div class="modal-title">
+            <span>📖</span> Indian Sign Language (ISL) Alphabet Reference Guide
+          </div>
+          <button class="btn-close" id="btnCloseGuide">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="modal-info">
+            ISL features both 1-handed and 2-handed alphabet gestures. Use the reference cards below to review the official signs for A through Z.
+          </p>
+          <div class="guide-grid" id="guideGrid">
+            <!-- Dynamically populated from /api/reference -->
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-primary" id="btnCloseGuideBtn">Got it, close guide</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+
