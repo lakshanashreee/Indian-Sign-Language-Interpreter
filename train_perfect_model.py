@@ -1,0 +1,381 @@
+import os
+import sys
+import time
+import cv2
+import joblib
+import numpy as np
+import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from sklearn.neural_network import MLPClassifier
+from sklearn.ensemble import ExtraTreesClassifier, VotingClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+
+print("=" * 70, flush=True)
+print("  DEFINITIVE ISL RE-TRAINING (1-HAND & 2-HAND HYBRID ENSEMBLE)", flush=True)
+print("  Targeting Perfection for All 26 Alphabets", flush=True)
+print("=" * 70, flush=True)
+
+# MediaPipe Detector
+base_options = python.BaseOptions(model_asset_path="hand_landmarker.task")
+options = vision.HandLandmarkerOptions(
+    base_options=base_options,
+    num_hands=2,
+    min_hand_detection_confidence=0.1,
+    min_tracking_confidence=0.1
+)
+detector = vision.HandLandmarker.create_from_options(options)
+
+def extract_precision_features(landmarks_list, handedness_list=None):
+    if not landmarks_list or len(landmarks_list) == 0:
+        return None
+        
+    hand_count = len(landmarks_list)
+    hands = []
+    
+    # Canonical ordering: Right hand first, Left hand second
+    if handedness_list and len(handedness_list) == hand_count:
+        names = [h[0].category_name for h in handedness_list]
+        if hand_count == 2 and names[0] == 'Left' and names[1] == 'Right':
+            hands = [landmarks_list[1], landmarks_list[0]]
+        else:
+            hands = [landmarks_list[0], landmarks_list[1]] if hand_count == 2 else [landmarks_list[0]]
+    else:
+        hands = landmarks_list
+
+    # Single-hand Ambidextrous normalization (mirror left hand to right)
+    is_left_single = False
+    if hand_count == 1 and handedness_list:
+        try:
+            if handedness_list[0][0].category_name == 'Left':
+                is_left_single = True
+        except Exception:
+            pass
+
+    features = [float(hand_count)]
+    
+    for h_idx in range(2):
+        if h_idx < hand_count:
+            raw_hand = hands[h_idx]
+            hand = []
+            for lm in raw_hand:
+                x_val = -lm['x'] if (is_left_single and h_idx == 0) else lm['x']
+                hand.append({'x': x_val, 'y': lm['y'], 'z': lm['z']})
+                
+            wx, wy, wz = hand[0]['x'], hand[0]['y'], hand[0]['z']
+            mx, my, mz = hand[9]['x'], hand[9]['y'], hand[9]['z']
+            palm_dist = np.sqrt((mx - wx)**2 + (my - wy)**2 + (mz - wz)**2)
+            if palm_dist < 1e-4: palm_dist = 1.0
+            
+            # 1. 21 normalized coordinates relative to wrist (63 values)
+            for lm in hand:
+                features.append((lm['x'] - wx) / palm_dist)
+                features.append((lm['y'] - wy) / palm_dist)
+                features.append((lm['z'] - wz) / palm_dist)
+                
+            # 2. Extension distance ratios (5 values)
+            tips = [4, 8, 12, 16, 20]
+            mcps = [1, 5, 9, 13, 17]
+            pips = [2, 6, 10, 14, 18]
+            for tip, mcp in zip(tips, mcps):
+                d_tip = np.sqrt((hand[tip]['x'] - wx)**2 + (hand[tip]['y'] - wy)**2)
+                d_mcp = np.sqrt((hand[mcp]['x'] - wx)**2 + (hand[mcp]['y'] - wy)**2)
+                features.append(d_tip / (d_mcp + 1e-4))
+                
+            # 3. Flexion cosine angles (5 values)
+            dips = [3, 7, 11, 15, 19]
+            for tip, dip, pip in zip(tips, dips, pips):
+                v1 = np.array([hand[dip]['x'] - hand[pip]['x'], hand[dip]['y'] - hand[pip]['y']])
+                v2 = np.array([hand[tip]['x'] - hand[dip]['x'], hand[tip]['y'] - hand[dip]['y']])
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
+                cos_ang = np.dot(v1, v2) / (norm1 * norm2 + 1e-4) if (norm1 > 0 and norm2 > 0) else 1.0
+                features.append(float(cos_ang))
+                
+            # 4. Fingertip-to-thumb distances (4 values)
+            for tip in [8, 12, 16, 20]:
+                d_th = np.sqrt((hand[tip]['x'] - hand[4]['x'])**2 + (hand[tip]['y'] - hand[4]['y'])**2)
+                features.append(d_th / palm_dist)
+                
+            # 5. Adjacent fingertip spread (3 values)
+            features.append(np.sqrt((hand[8]['x'] - hand[12]['x'])**2 + (hand[8]['y'] - hand[12]['y'])**2) / palm_dist)
+            features.append(np.sqrt((hand[12]['x'] - hand[16]['x'])**2 + (hand[12]['y'] - hand[16]['y'])**2) / palm_dist)
+            features.append(np.sqrt((hand[16]['x'] - hand[20]['x'])**2 + (hand[16]['y'] - hand[20]['y'])**2) / palm_dist)
+            
+            # 6. Thumb relative offsets (4 values: distinguishes A vs S vs E)
+            features.append((hand[4]['y'] - hand[5]['y']) / palm_dist)
+            features.append((hand[4]['x'] - hand[5]['x']) / palm_dist)
+            features.append((hand[4]['y'] - hand[8]['y']) / palm_dist)
+            features.append((hand[4]['x'] - hand[8]['x']) / palm_dist)
+            
+            # 7. Finger cross indicator for R (1 value)
+            features.append((hand[8]['x'] - hand[12]['x']) / palm_dist)
+        else:
+            features.extend([0.0] * 85)
+            
+    # Inter-hand interaction features (8 values)
+    if hand_count >= 2:
+        h1 = hands[0]
+        h2 = hands[1]
+        w_d = np.sqrt((h1[0]['x'] - h2[0]['x'])**2 + (h1[0]['y'] - h2[0]['y'])**2)
+        idx_d = np.sqrt((h1[8]['x'] - h2[8]['x'])**2 + (h1[8]['y'] - h2[8]['y'])**2)
+        th_d = np.sqrt((h1[4]['x'] - h2[4]['x'])**2 + (h1[4]['y'] - h2[4]['y'])**2)
+        m_d = np.sqrt((h1[12]['x'] - h2[12]['x'])**2 + (h1[12]['y'] - h2[12]['y'])**2)
+        touch_palm = np.sqrt((h1[8]['x'] - h2[9]['x'])**2 + (h1[8]['y'] - h2[9]['y'])**2)
+        v_offset = h1[0]['y'] - h2[0]['y']
+        h_offset = h1[0]['x'] - h2[0]['x']
+        pinky_d = np.sqrt((h1[20]['x'] - h2[20]['x'])**2 + (h1[20]['y'] - h2[20]['y'])**2)
+        features.extend([w_d, idx_d, th_d, m_d, touch_palm, v_offset, h_offset, pinky_d])
+    else:
+        features.extend([0.0] * 8)
+        
+    return np.array(features, dtype=np.float32)
+
+def augment_vector(feat, n_aug=8):
+    augmented = [feat]
+    for _ in range(n_aug):
+        noise = np.random.normal(0, 0.015, size=feat.shape).astype(np.float32)
+        scale = np.random.uniform(0.92, 1.08)
+        aug = feat * scale + noise
+        aug[0] = feat[0]
+        augmented.append(aug)
+    return augmented
+
+def build_canonical_hand(finger_states, thumb_pose='up', spread=False, crossed=False, o_shape=False, pinch_index=False, base_x=0.5, base_y=0.75):
+    wrist = {'x': base_x, 'y': base_y, 'z': 0.0}
+    hand = [wrist]
+    
+    if thumb_pose == 'up':
+        hand.extend([{'x': base_x-0.08, 'y': base_y-0.05, 'z': 0.0}, {'x': base_x-0.12, 'y': base_y-0.13, 'z': 0.0}, {'x': base_x-0.14, 'y': base_y-0.20, 'z': 0.0}, {'x': base_x-0.15, 'y': base_y-0.29, 'z': 0.0}])
+    elif thumb_pose == 'across':
+        hand.extend([{'x': base_x-0.07, 'y': base_y-0.05, 'z': 0.0}, {'x': base_x-0.06, 'y': base_y-0.13, 'z': -0.05}, {'x': base_x-0.02, 'y': base_y-0.17, 'z': -0.08}, {'x': base_x+0.02, 'y': base_y-0.17, 'z': -0.08}])
+    elif thumb_pose == 'tucked':
+        hand.extend([{'x': base_x-0.06, 'y': base_y-0.05, 'z': 0.0}, {'x': base_x-0.04, 'y': base_y-0.09, 'z': 0.02}, {'x': base_x-0.01, 'y': base_y-0.09, 'z': 0.04}, {'x': base_x+0.01, 'y': base_y-0.09, 'z': 0.04}])
+    elif thumb_pose == 'out':
+        hand.extend([{'x': base_x-0.08, 'y': base_y-0.05, 'z': 0.0}, {'x': base_x-0.16, 'y': base_y-0.06, 'z': 0.0}, {'x': base_x-0.23, 'y': base_y-0.06, 'z': 0.0}, {'x': base_x-0.30, 'y': base_y-0.06, 'z': 0.0}])
+    elif o_shape or pinch_index:
+        hand.extend([{'x': base_x-0.06, 'y': base_y-0.07, 'z': 0.0}, {'x': base_x-0.08, 'y': base_y-0.17, 'z': -0.05}, {'x': base_x-0.06, 'y': base_y-0.23, 'z': -0.05}, {'x': base_x-0.02, 'y': base_y-0.25, 'z': 0.0}])
+    else:
+        hand.extend([{'x': base_x-0.08, 'y': base_y-0.05, 'z': 0.0}, {'x': base_x-0.12, 'y': base_y-0.13, 'z': 0.0}, {'x': base_x-0.14, 'y': base_y-0.20, 'z': 0.0}, {'x': base_x-0.15, 'y': base_y-0.27, 'z': 0.0}])
+        
+    # Index
+    if o_shape or pinch_index:
+        hand.extend([{'x': base_x-0.04, 'y': base_y-0.20, 'z': 0.0}, {'x': base_x-0.04, 'y': base_y-0.30, 'z': -0.08}, {'x': base_x-0.03, 'y': base_y-0.31, 'z': -0.08}, {'x': base_x-0.02, 'y': base_y-0.26, 'z': 0.0}])
+    elif finger_states[0]:
+        ix = base_x+0.02 if crossed else (base_x-0.08 if spread else base_x-0.04)
+        hand.extend([{'x': base_x-0.04, 'y': base_y-0.20, 'z': 0.0}, {'x': ix, 'y': base_y-0.32, 'z': 0.0}, {'x': ix, 'y': base_y-0.42, 'z': 0.0}, {'x': ix, 'y': base_y-0.53, 'z': 0.0}])
+    else:
+        hand.extend([{'x': base_x-0.04, 'y': base_y-0.20, 'z': 0.0}, {'x': base_x-0.04, 'y': base_y-0.23, 'z': -0.05}, {'x': base_x-0.04, 'y': base_y-0.15, 'z': -0.04}, {'x': base_x-0.04, 'y': base_y-0.12, 'z': 0.0}])
+
+    # Middle
+    if o_shape:
+        hand.extend([{'x': base_x, 'y': base_y-0.21, 'z': 0.0}, {'x': base_x, 'y': base_y-0.31, 'z': -0.08}, {'x': base_x, 'y': base_y-0.30, 'z': -0.08}, {'x': base_x-0.01, 'y': base_y-0.25, 'z': 0.0}])
+    elif finger_states[1]:
+        mx = base_x-0.04 if crossed else (base_x+0.02 if spread else base_x)
+        hand.extend([{'x': base_x, 'y': base_y-0.21, 'z': 0.0}, {'x': mx, 'y': base_y-0.34, 'z': 0.0}, {'x': mx, 'y': base_y-0.45, 'z': 0.0}, {'x': mx, 'y': base_y-0.56, 'z': 0.0}])
+    else:
+        hand.extend([{'x': base_x, 'y': base_y-0.21, 'z': 0.0}, {'x': base_x, 'y': base_y-0.23, 'z': -0.05}, {'x': base_x, 'y': base_y-0.15, 'z': -0.04}, {'x': base_x, 'y': base_y-0.11, 'z': 0.0}])
+
+    # Ring
+    if o_shape:
+        hand.extend([{'x': base_x+0.04, 'y': base_y-0.20, 'z': 0.0}, {'x': base_x+0.04, 'y': base_y-0.29, 'z': -0.06}, {'x': base_x+0.03, 'y': base_y-0.27, 'z': -0.06}, {'x': base_x, 'y': base_y-0.24, 'z': 0.0}])
+    elif finger_states[2]:
+        rx = base_x+0.06 if spread else base_x+0.04
+        hand.extend([{'x': base_x+0.04, 'y': base_y-0.20, 'z': 0.0}, {'x': rx, 'y': base_y-0.32, 'z': 0.0}, {'x': rx, 'y': base_y-0.42, 'z': 0.0}, {'x': rx, 'y': base_y-0.53, 'z': 0.0}])
+    else:
+        hand.extend([{'x': base_x+0.04, 'y': base_y-0.20, 'z': 0.0}, {'x': base_x+0.04, 'y': base_y-0.22, 'z': -0.05}, {'x': base_x+0.04, 'y': base_y-0.14, 'z': -0.04}, {'x': base_x+0.04, 'y': base_y-0.11, 'z': 0.0}])
+
+    # Pinky
+    if o_shape:
+        hand.extend([{'x': base_x+0.08, 'y': base_y-0.17, 'z': 0.0}, {'x': base_x+0.08, 'y': base_y-0.25, 'z': -0.05}, {'x': base_x+0.06, 'y': base_y-0.23, 'z': -0.05}, {'x': base_x+0.01, 'y': base_y-0.22, 'z': 0.0}])
+    elif finger_states[3]:
+        px = base_x+0.12 if spread else base_x+0.09
+        hand.extend([{'x': base_x+0.08, 'y': base_y-0.17, 'z': 0.0}, {'x': px, 'y': base_y-0.28, 'z': 0.0}, {'x': px, 'y': base_y-0.37, 'z': 0.0}, {'x': px, 'y': base_y-0.47, 'z': 0.0}])
+    else:
+        hand.extend([{'x': base_x+0.08, 'y': base_y-0.17, 'z': 0.0}, {'x': base_x+0.08, 'y': base_y-0.20, 'z': -0.05}, {'x': base_x+0.08, 'y': base_y-0.13, 'z': -0.04}, {'x': base_x+0.08, 'y': base_y-0.10, 'z': 0.0}])
+
+    return hand
+
+all_classes = [chr(c) for c in range(65, 91)]
+X = []
+y = []
+
+priority_letters = set(['A', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'N', 'O', 'P', 'Q', 'R', 'S', 'Z'])
+
+print("\n[Phase 1] Extracting MediaPipe Landmarks from Available Datasets...", flush=True)
+t0 = time.time()
+
+# 1. Extract from ISL_Dataset
+if os.path.exists("ISL_Dataset"):
+    for folder in sorted(os.listdir("ISL_Dataset")):
+        c = folder.upper()
+        if c not in all_classes: continue
+        c_idx = all_classes.index(c)
+        folder_path = os.path.join("ISL_Dataset", folder)
+        files = os.listdir(folder_path)
+        extracted = 0
+        n_aug = 9 if c in priority_letters else 6
+        
+        for f in files:
+            img = cv2.imread(os.path.join(folder_path, f))
+            if img is None: continue
+            padded = cv2.copyMakeBorder(img, 60, 60, 60, 60, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+            padded = cv2.resize(padded, (256, 256))
+            rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
+            res = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            if res.hand_landmarks and len(res.hand_landmarks) > 0:
+                lms = [[{'x': lm.x, 'y': lm.y, 'z': lm.z} for lm in hand] for hand in res.hand_landmarks]
+                feat = extract_precision_features(lms, res.handedness)
+                if feat is not None:
+                    extracted += 1
+                    for aug in augment_vector(feat, n_aug=n_aug):
+                        X.append(aug)
+                        y.append(c_idx)
+        print(f"ISL_Dataset '{c}': {extracted} extracted -> {extracted * (n_aug + 1)} augmented", flush=True)
+
+# 2. Extract from dataset_ISL
+if os.path.exists("dataset_ISL"):
+    for folder in sorted(os.listdir("dataset_ISL")):
+        c = folder.upper()
+        if c not in all_classes: continue
+        c_idx = all_classes.index(c)
+        max_samples = 40 if c in priority_letters else 25
+        n_aug = 8 if c in priority_letters else 5
+        
+        folder_path = os.path.join("dataset_ISL", folder)
+        files = os.listdir(folder_path)
+        extracted = 0
+        for f in files[:100]:
+            if extracted >= max_samples: break
+            img = cv2.imread(os.path.join(folder_path, f))
+            if img is None: continue
+            padded = cv2.copyMakeBorder(img, 70, 70, 70, 70, cv2.BORDER_CONSTANT, value=[128, 128, 128])
+            padded = cv2.resize(padded, (256, 256))
+            rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB)
+            res = detector.detect(mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb))
+            if res.hand_landmarks and len(res.hand_landmarks) > 0:
+                lms = [[{'x': lm.x, 'y': lm.y, 'z': lm.z} for lm in hand] for hand in res.hand_landmarks]
+                feat = extract_precision_features(lms, res.handedness)
+                if feat is not None:
+                    extracted += 1
+                    for aug in augment_vector(feat, n_aug=n_aug):
+                        X.append(aug)
+                        y.append(c_idx)
+        print(f"dataset_ISL '{c}': {extracted} extracted -> added to training", flush=True)
+
+# 3. Inject Comprehensive Canonical 1-Hand & 2-Hand Prototypes
+print("\n[Phase 2] Injecting Canonical 1-Handed & 2-Handed Postures...", flush=True)
+
+# Standard 1-handed canonical definitions
+canonical_1h = {
+    'A': ([False, False, False, False], 'up', False, False, False, False),
+    'B': ([True, True, True, True], 'tucked', False, False, False, False),
+    'C': ([False, False, False, False], 'out', False, False, True, False),
+    'D': ([True, False, False, False], 'across', False, False, False, True),
+    'E': ([False, False, False, False], 'tucked', False, False, False, False),
+    'F': ([False, True, True, True], 'out', False, False, False, True),
+    'G': ([True, False, False, False], 'out', False, False, False, False),
+    'H': ([True, True, False, False], 'out', False, False, False, False),
+    'I': ([False, False, False, True], 'across', False, False, False, False),  # Pinky UP
+    'J': ([False, False, False, True], 'tucked', False, False, False, False),
+    'K': ([True, True, False, False], 'up', True, False, False, False),
+    'L': ([True, False, False, False], 'out', False, False, False, False),     # L shape
+    'N': ([True, True, False, False], 'across', False, False, False, False),
+    'O': ([False, False, False, False], 'out', False, False, True, False),      # O circle
+    'P': ([True, True, False, False], 'tucked', False, False, False, False),
+    'Q': ([True, False, False, False], 'tucked', False, False, False, True),
+    'R': ([True, True, False, False], 'across', False, True, False, False),    # Crossed index/middle
+    'S': ([False, False, False, False], 'across', False, False, False, False), # Fist thumb across
+    'T': ([False, False, False, False], 'up', False, False, False, False),
+    'U': ([True, True, False, False], 'across', False, False, False, False),   # Glued together
+    'V': ([True, True, False, False], 'across', True, False, False, False),    # V spread
+    'W': ([True, True, True, False], 'across', True, False, False, False),     # W shape
+    'X': ([False, False, False, False], 'across', False, False, False, False),
+    'Y': ([False, False, False, True], 'out', False, False, False, False),      # Shaka
+    'Z': ([True, False, False, False], 'across', False, False, False, False)
+}
+
+for letter, cfg in canonical_1h.items():
+    c_idx = all_classes.index(letter)
+    h = build_canonical_hand(cfg[0], thumb_pose=cfg[1], spread=cfg[2], crossed=cfg[3], o_shape=cfg[4], pinch_index=cfg[5])
+    feat = extract_precision_features([h])
+    if feat is not None:
+        for aug in augment_vector(feat, n_aug=30):
+            X.append(aug)
+            y.append(c_idx)
+
+# Standard 2-handed canonical definitions
+two_hand_letters = ['A', 'B', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'N', 'P', 'Q', 'S', 'Z']
+for letter in two_hand_letters:
+    c_idx = all_classes.index(letter)
+    # Hand 1 (Right) and Hand 2 (Left)
+    cfg1 = canonical_1h[letter]
+    h1 = build_canonical_hand(cfg1[0], thumb_pose=cfg1[1], base_x=0.42, base_y=0.70)
+    # Non-dominant hand (open palm or mirror fist)
+    h2 = build_canonical_hand([True, True, True, True], thumb_pose='out', base_x=0.58, base_y=0.70)
+    feat2 = extract_precision_features([h1, h2])
+    if feat2 is not None:
+        for aug in augment_vector(feat2, n_aug=25):
+            X.append(aug)
+            y.append(c_idx)
+
+X = np.array(X, dtype=np.float32)
+y = np.array(y, dtype=np.int32)
+
+print(f"\nTotal Dataset Samples: {len(X)} across all {len(np.unique(y))} classes (Dimension: {X.shape[1]})", flush=True)
+
+# Train/Test Split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.15, random_state=42, stratify=y
+)
+
+print(f"\n[Phase 3] Training Definitive Ensemble Classifier (ExtraTrees + MLP)...", flush=True)
+
+et_clf = ExtraTreesClassifier(
+    n_estimators=150,
+    max_depth=26,
+    min_samples_split=3,
+    random_state=42,
+    n_jobs=-1
+)
+
+mlp_clf = MLPClassifier(
+    hidden_layer_sizes=(256, 128),
+    activation='relu',
+    solver='adam',
+    max_iter=110,
+    early_stopping=True,
+    validation_fraction=0.1,
+    n_iter_no_change=6,
+    random_state=42
+)
+
+ensemble_clf = VotingClassifier(
+    estimators=[('et', et_clf), ('mlp', mlp_clf)],
+    voting='soft'
+)
+
+t_start = time.time()
+ensemble_clf.fit(X_train, y_train)
+print(f"Fit completed in {time.time() - t_start:.2f}s", flush=True)
+
+y_pred = ensemble_clf.predict(X_test)
+final_acc = accuracy_score(y_test, y_pred)
+
+print(f"\n" + "=" * 65, flush=True)
+print(f"  DEFINITIVE 26-CLASS TEST ACCURACY: {final_acc * 100:.2f}%", flush=True)
+print("=" * 65 + "\n", flush=True)
+
+# Save Master Model
+model_payload = {
+    'classifier': ensemble_clf,
+    'classes': all_classes,
+    'feature_dim': X.shape[1],
+    'accuracy': float(final_acc),
+    'trained_at': time.strftime('%Y-%m-%d %H:%M:%S')
+}
+
+output_path = "isl_landmark_model.joblib"
+joblib.dump(model_payload, output_path)
+print(f"Model saved to {output_path} ({os.path.getsize(output_path)/1024/1024:.2f} MB)", flush=True)

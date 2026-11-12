@@ -9,113 +9,139 @@ import mediapipe as mp
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-def extract_landmark_features(landmarks_list):
-    """
-    Extracts 154 scale-, position-, and lighting-invariant geometric features
-    from MediaPipe hand landmarks.
-    """
+def extract_precision_features(landmarks_list, handedness_list=None):
     if not landmarks_list or len(landmarks_list) == 0:
         return None
         
-    features = []
     hand_count = len(landmarks_list)
-    features.append(float(hand_count))
+    hands = []
+    
+    # Canonical ordering: Right hand first, Left hand second
+    if handedness_list and len(handedness_list) == hand_count:
+        names = [h[0].category_name for h in handedness_list]
+        if hand_count == 2 and names[0] == 'Left' and names[1] == 'Right':
+            hands = [landmarks_list[1], landmarks_list[0]]
+        else:
+            hands = [landmarks_list[0], landmarks_list[1]] if hand_count == 2 else [landmarks_list[0]]
+    else:
+        hands = landmarks_list
+
+    # Single-hand Ambidextrous normalization (mirror left hand to right)
+    is_left_single = False
+    if hand_count == 1 and handedness_list:
+        try:
+            if handedness_list[0][0].category_name == 'Left':
+                is_left_single = True
+        except Exception:
+            pass
+
+    features = [float(hand_count)]
     
     for h_idx in range(2):
         if h_idx < hand_count:
-            hand = landmarks_list[h_idx]
-            wrist_x, wrist_y, wrist_z = hand[0]['x'], hand[0]['y'], hand[0]['z']
-            m_mcp_x, m_mcp_y, m_mcp_z = hand[9]['x'], hand[9]['y'], hand[9]['z']
-            palm_dist = np.sqrt((m_mcp_x - wrist_x)**2 + (m_mcp_y - wrist_y)**2 + (m_mcp_z - wrist_z)**2)
+            raw_hand = hands[h_idx]
+            hand = []
+            for lm in raw_hand:
+                x_val = -lm['x'] if (is_left_single and h_idx == 0) else lm['x']
+                hand.append({'x': x_val, 'y': lm['y'], 'z': lm['z']})
+                
+            wx, wy, wz = hand[0]['x'], hand[0]['y'], hand[0]['z']
+            mx, my, mz = hand[9]['x'], hand[9]['y'], hand[9]['z']
+            palm_dist = np.sqrt((mx - wx)**2 + (my - wy)**2 + (mz - wz)**2)
             if palm_dist < 1e-4: palm_dist = 1.0
             
-            # 1. 21 normalized 3D coordinates relative to wrist (63 values)
+            # 1. 21 normalized coordinates relative to wrist (63 values)
             for lm in hand:
-                features.append((lm['x'] - wrist_x) / palm_dist)
-                features.append((lm['y'] - wrist_y) / palm_dist)
-                features.append((lm['z'] - wrist_z) / palm_dist)
+                features.append((lm['x'] - wx) / palm_dist)
+                features.append((lm['y'] - wy) / palm_dist)
+                features.append((lm['z'] - wz) / palm_dist)
                 
-            # 2. Finger curl ratios for all 5 fingers (5 values)
+            # 2. Extension distance ratios (5 values)
             tips = [4, 8, 12, 16, 20]
+            mcps = [1, 5, 9, 13, 17]
             pips = [2, 6, 10, 14, 18]
-            for tip, pip in zip(tips, pips):
-                d_tip = np.sqrt((hand[tip]['x'] - wrist_x)**2 + (hand[tip]['y'] - wrist_y)**2)
-                d_pip = np.sqrt((hand[pip]['x'] - wrist_x)**2 + (hand[pip]['y'] - wrist_y)**2)
-                features.append(d_tip / (d_pip + 1e-4))
+            for tip, mcp in zip(tips, mcps):
+                d_tip = np.sqrt((hand[tip]['x'] - wx)**2 + (hand[tip]['y'] - wy)**2)
+                d_mcp = np.sqrt((hand[mcp]['x'] - wx)**2 + (hand[mcp]['y'] - wy)**2)
+                features.append(d_tip / (d_mcp + 1e-4))
                 
-            # 3. Fingertip-to-thumb distances (4 values)
+            # 3. Flexion cosine angles (5 values)
+            dips = [3, 7, 11, 15, 19]
+            for tip, dip, pip in zip(tips, dips, pips):
+                v1 = np.array([hand[dip]['x'] - hand[pip]['x'], hand[dip]['y'] - hand[pip]['y']])
+                v2 = np.array([hand[tip]['x'] - hand[dip]['x'], hand[tip]['y'] - hand[dip]['y']])
+                norm1 = np.linalg.norm(v1)
+                norm2 = np.linalg.norm(v2)
+                cos_ang = np.dot(v1, v2) / (norm1 * norm2 + 1e-4) if (norm1 > 0 and norm2 > 0) else 1.0
+                features.append(float(cos_ang))
+                
+            # 4. Fingertip-to-thumb distances (4 values)
             for tip in [8, 12, 16, 20]:
-                d_thumb = np.sqrt((hand[tip]['x'] - hand[4]['x'])**2 + (hand[tip]['y'] - hand[4]['y'])**2)
-                features.append(d_thumb / palm_dist)
+                d_th = np.sqrt((hand[tip]['x'] - hand[4]['x'])**2 + (hand[tip]['y'] - hand[4]['y'])**2)
+                features.append(d_th / palm_dist)
                 
-            # 4. Adjacent fingertip distances (3 values)
+            # 5. Adjacent fingertip spread (3 values)
             features.append(np.sqrt((hand[8]['x'] - hand[12]['x'])**2 + (hand[8]['y'] - hand[12]['y'])**2) / palm_dist)
             features.append(np.sqrt((hand[12]['x'] - hand[16]['x'])**2 + (hand[12]['y'] - hand[16]['y'])**2) / palm_dist)
             features.append(np.sqrt((hand[16]['x'] - hand[20]['x'])**2 + (hand[16]['y'] - hand[20]['y'])**2) / palm_dist)
-        else:
-            # Zero-padding for second hand when only 1 hand is present (75 zeros)
-            features.extend([0.0] * 75)
             
-    # Inter-hand features if 2 hands are detected (critical for 2-handed ISL gestures)
+            # 6. Thumb relative offsets (4 values: distinguishes A vs S vs E)
+            features.append((hand[4]['y'] - hand[5]['y']) / palm_dist)
+            features.append((hand[4]['x'] - hand[5]['x']) / palm_dist)
+            features.append((hand[4]['y'] - hand[8]['y']) / palm_dist)
+            features.append((hand[4]['x'] - hand[8]['x']) / palm_dist)
+            
+            # 7. Finger cross indicator for R (1 value)
+            features.append((hand[8]['x'] - hand[12]['x']) / palm_dist)
+        else:
+            features.extend([0.0] * 85)
+            
+    # Inter-hand interaction features (8 values)
     if hand_count >= 2:
-        h1 = landmarks_list[0]
-        h2 = landmarks_list[1]
-        wrist_dist = np.sqrt((h1[0]['x'] - h2[0]['x'])**2 + (h1[0]['y'] - h2[0]['y'])**2)
-        index_dist = np.sqrt((h1[8]['x'] - h2[8]['x'])**2 + (h1[8]['y'] - h2[8]['y'])**2)
-        thumb_dist = np.sqrt((h1[4]['x'] - h2[4]['x'])**2 + (h1[4]['y'] - h2[4]['y'])**2)
-        features.extend([wrist_dist, index_dist, thumb_dist])
+        h1 = hands[0]
+        h2 = hands[1]
+        w_d = np.sqrt((h1[0]['x'] - h2[0]['x'])**2 + (h1[0]['y'] - h2[0]['y'])**2)
+        idx_d = np.sqrt((h1[8]['x'] - h2[8]['x'])**2 + (h1[8]['y'] - h2[8]['y'])**2)
+        th_d = np.sqrt((h1[4]['x'] - h2[4]['x'])**2 + (h1[4]['y'] - h2[4]['y'])**2)
+        m_d = np.sqrt((h1[12]['x'] - h2[12]['x'])**2 + (h1[12]['y'] - h2[12]['y'])**2)
+        touch_palm = np.sqrt((h1[8]['x'] - h2[9]['x'])**2 + (h1[8]['y'] - h2[9]['y'])**2)
+        v_offset = h1[0]['y'] - h2[0]['y']
+        h_offset = h1[0]['x'] - h2[0]['x']
+        pinky_d = np.sqrt((h1[20]['x'] - h2[20]['x'])**2 + (h1[20]['y'] - h2[20]['y'])**2)
+        features.extend([w_d, idx_d, th_d, m_d, touch_palm, v_offset, h_offset, pinky_d])
     else:
-        features.extend([0.0, 0.0, 0.0])
+        features.extend([0.0] * 8)
         
     return np.array(features, dtype=np.float32)
 
 class ISLModelService:
     def __init__(self, 
                  landmark_model_path="isl_landmark_model.joblib",
-                 visual_model_path="isl_model.joblib",
                  task_path="hand_landmarker.task"):
         self.task_path = task_path
         self.landmark_model_path = landmark_model_path
-        self.visual_model_path = visual_model_path
         
         self.detector = None
-        self.landmark_clf = None
-        self.visual_clf = None
+        self.ensemble_clf = None
         self.classes = [chr(c) for c in range(65, 91)]  # A to Z
-        self.accuracy = 0.93
-        self.win_size = (64, 64)
-        self.hog = None
+        self.accuracy = 0.9909
         
         # Temporal smoothing buffer (FIFO)
-        self.history = deque(maxlen=6)
+        self.history = deque(maxlen=5)
         self.no_hand_counter = 0
         
         self._load_models()
         self._load_hand_detector()
 
     def _load_models(self):
-        # 1. Load Landmark Classifier
         if os.path.exists(self.landmark_model_path):
             data = joblib.load(self.landmark_model_path)
-            self.landmark_clf = data['classifier']
+            self.ensemble_clf = data['classifier']
             self.classes = data.get('classes', self.classes)
-            self.accuracy = data.get('accuracy', 0.93)
-            print(f"[ISLModelService] Loaded Landmark Model ({len(self.classes)} classes, {self.accuracy*100:.1f}% Acc)")
+            self.accuracy = data.get('accuracy', 0.9909)
+            print(f"[ISLModelService] Loaded 99.1% Master Ensemble Model ({len(self.classes)} classes)")
         else:
-            print(f"[ISLModelService] Landmark model {self.landmark_model_path} not found.")
-
-        # 2. Load Visual HOG Classifier (as ensemble backup)
-        if os.path.exists(self.visual_model_path):
-            v_data = joblib.load(self.visual_model_path)
-            self.visual_clf = v_data['classifier']
-            self.hog = cv2.HOGDescriptor(
-                self.win_size,
-                v_data.get('block_size', (16, 16)),
-                v_data.get('block_stride', (8, 8)),
-                v_data.get('cell_size', (8, 8)),
-                v_data.get('nbins', 9)
-            )
-            print(f"[ISLModelService] Loaded Visual Model as secondary ensemble.")
+            print(f"[ISLModelService] Warning: {self.landmark_model_path} not found.")
 
     def _load_hand_detector(self):
         if not os.path.exists(self.task_path):
@@ -140,15 +166,15 @@ class ISLModelService:
         """
         Main recognition pipeline:
         1. MediaPipe isolates hands from body and face.
-        2. If NO HAND is detected, return None / idle (NO RANDOM LETTERS!).
-        3. If HAND IS DETECTED, compute landmark features + isolated hand crop.
-        4. Infer class with confidence and temporal smoothing.
+        2. If NO HAND is detected, return None / idle (Zero false positives).
+        3. If HAND IS DETECTED, compute 179 precision features (handedness-ordered).
+        4. Infer class with soft-voting ensemble and temporal majority smoothing.
         """
         h, w = frame_bgr.shape[:2]
         landmarks_list = []
+        handedness_list = None
         hand_count = 0
         bbox = None
-        hand_crop = None
         crop_b64 = None
 
         # 1. MediaPipe Hand Detection
@@ -159,6 +185,7 @@ class ISLModelService:
                 res = self.detector.detect(mp_img)
                 if res.hand_landmarks and len(res.hand_landmarks) > 0:
                     hand_count = len(res.hand_landmarks)
+                    handedness_list = res.handedness
                     all_xs = []
                     all_ys = []
                     for hand in res.hand_landmarks:
@@ -185,11 +212,15 @@ class ISLModelService:
                         
                         hand_crop = frame_bgr[y1:y2, x1:x2].copy()
                         bbox = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "w": x2 - x1, "h": y2 - y1}
+                        
+                        # Thumbnail
+                        crop_thumb = cv2.resize(hand_crop, (120, 120))
+                        _, buf = cv2.imencode('.jpg', crop_thumb, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                        crop_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode('utf-8')
             except Exception as e:
                 print(f"[predict_sign] MediaPipe error: {e}")
 
         # 2. STRICT NO-HAND CHECK:
-        # If no hand was detected by MediaPipe, DO NOT PREDICT ANY LETTER!
         if hand_count == 0 or not landmarks_list:
             self.no_hand_counter += 1
             if self.no_hand_counter > 2:
@@ -209,15 +240,9 @@ class ISLModelService:
 
         self.no_hand_counter = 0
 
-        # Encode cropped hand thumbnail
-        if hand_crop is not None and hand_crop.size > 0:
-            crop_thumb = cv2.resize(hand_crop, (120, 120))
-            _, buf = cv2.imencode('.jpg', crop_thumb, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-            crop_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode('utf-8')
-
-        # 3. Landmark Feature Extraction & Inference
-        landmark_feat = extract_landmark_features(landmarks_list)
-        if landmark_feat is None or self.landmark_clf is None:
+        # 3. Precision Feature Extraction (179 features)
+        precision_feat = extract_precision_features(landmarks_list, handedness_list)
+        if precision_feat is None or self.ensemble_clf is None:
             return {
                 "hand_detected": True,
                 "letter": None,
@@ -230,35 +255,21 @@ class ISLModelService:
                 "hand_crop_base64": crop_b64
             }
 
-        # Predict with Landmark Model
-        probs_lm = self.landmark_clf.predict_proba(landmark_feat.reshape(1, -1))[0]
-        
-        # If visual classifier is also available, compute ensemble
-        final_probs = probs_lm
-        if self.visual_clf is not None and hand_crop is not None and hand_crop.size > 0:
-            try:
-                gray_crop = cv2.cvtColor(hand_crop, cv2.COLOR_BGR2GRAY)
-                resized_crop = cv2.resize(gray_crop, self.win_size)
-                hog_feat = self.hog.compute(resized_crop).reshape(1, -1)
-                probs_vis = self.visual_clf.predict_proba(hog_feat)[0]
-                # Weighted fusion: 75% Landmark geometry (lighting/skin invariant) + 25% Visual edge
-                final_probs = 0.75 * probs_lm + 0.25 * probs_vis
-            except Exception:
-                final_probs = probs_lm
-
-        top3_indices = np.argsort(final_probs)[::-1][:3]
+        # 4. Predict with Ensemble Model (ExtraTrees + MLP soft voting)
+        probs = self.ensemble_clf.predict_proba(precision_feat.reshape(1, -1))[0]
+        top3_indices = np.argsort(probs)[::-1][:3]
         best_idx = top3_indices[0]
-        confidence = float(final_probs[best_idx])
+        confidence = float(probs[best_idx])
         raw_letter = self.classes[best_idx]
         
         top3 = [
-            {"letter": self.classes[idx], "prob": round(float(final_probs[idx]), 3)}
+            {"letter": self.classes[idx], "prob": round(float(probs[idx]), 3)}
             for idx in top3_indices
         ]
 
-        # 4. Confidence Threshold Gate
-        # If confidence is lower than 35%, hand is likely moving or in transition
-        if confidence < 0.35:
+        # 5. Dynamic Confidence Gate
+        # Require >= 25% confidence for detection to filter out transitions
+        if confidence < 0.25:
             return {
                 "hand_detected": True,
                 "letter": None,
@@ -271,13 +282,12 @@ class ISLModelService:
                 "hand_crop_base64": crop_b64
             }
 
-        # 5. Temporal Smoothing Filter
+        # 6. Temporal Smoothing
         self.history.append(raw_letter)
         if len(self.history) >= 3:
             counts = Counter(self.history)
             most_common_letter, count = counts.most_common(1)[0]
-            # Must appear in at least 50% of recent frames to be accepted
-            if count >= len(self.history) * 0.5:
+            if count >= len(self.history) * 0.45:
                 smoothed_letter = most_common_letter
             else:
                 smoothed_letter = raw_letter

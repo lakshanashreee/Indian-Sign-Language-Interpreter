@@ -1,0 +1,10 @@
+dataset_ISL/
+ISL_Dataset/
+isl_model.joblib
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.log
+.vscode/
+
