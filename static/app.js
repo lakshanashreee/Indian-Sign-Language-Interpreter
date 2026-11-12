@@ -1,6 +1,6 @@
 /**
  * Indian Sign Language (ISL) Interpreter
- * Real-Time Vision & Natural Gesture Interaction Engine
+ * Real-Time Vision & Landmark Interaction Engine
  */
 
 // Application State
@@ -8,7 +8,7 @@ const state = {
   cameraActive: false,
   isMirrored: true,
   showSkeleton: true,
-  showFramingBox: true,
+  showFramingBox: false, // Default off to reduce visual clutter
   enableTTS: true,
   activeMode: 'alphabet', // 'alphabet' | 'word' | 'sentence'
   stream: null,
@@ -16,7 +16,7 @@ const state = {
   fpsCounter: 0,
   lastFpsTimestamp: performance.now(),
   currentFps: 0,
-  
+
   // Real-time Recognition Output
   currentLetter: '-',
   currentSmoothedLetter: '-',
@@ -25,25 +25,24 @@ const state = {
   handDetected: false,
   handsCount: 0,
   lastHandCrop: null,
-  
+
   // Alphabet Mode State
   alphaHistory: [],
   lastSpokenAlpha: null,
-  
+
   // Word Mode State
   wordTargetLength: 4,
-  wordSlots: [], // array of { index: number, char: string, locked: boolean }
+  wordSlots: [],
   activeWordSlotIndex: 0,
   assembledWord: '',
-  
+
   // Sentence Mode State
   sentenceTargetWords: 3,
   currentWordIndex: 0,
   completedWords: [],
-  currentWordLetters: [], // current word being spelled
-  activeSentenceSlotIndex: 0,
+  currentWordLetters: [],
   fullSentence: '',
-  
+
   // System Guide Cache
   guideData: null
 };
@@ -157,38 +156,38 @@ window.addEventListener('DOMContentLoaded', () => {
   initEventListeners();
   fetchSystemInfo();
   initWordMode(4);
+  if (framingBox) framingBox.style.display = 'none';
 });
 
 function initEventListeners() {
-  // Camera Controls
   btnToggleCamera.addEventListener('click', toggleCamera);
   btnPlaceholderStartCam.addEventListener('click', toggleCamera);
+
   btnToggleSkeleton.addEventListener('click', () => {
     state.showSkeleton = !state.showSkeleton;
     btnToggleSkeleton.innerHTML = `<span>🦴</span> Skeleton: ${state.showSkeleton ? 'ON' : 'OFF'}`;
   });
+
   btnToggleBox.addEventListener('click', () => {
     state.showFramingBox = !state.showFramingBox;
-    framingBox.style.display = state.showFramingBox ? 'block' : 'none';
+    if (framingBox) framingBox.style.display = state.showFramingBox ? 'block' : 'none';
     btnToggleBox.innerHTML = `<span>🎯</span> Guide Box: ${state.showFramingBox ? 'ON' : 'OFF'}`;
   });
+
   btnFlipCam.addEventListener('click', () => {
     state.isMirrored = !state.isMirrored;
     videoEl.style.transform = state.isMirrored ? 'scaleX(-1)' : 'scaleX(1)';
   });
 
-  // TTS Toggle
   btnToggleTTS.addEventListener('click', () => {
     state.enableTTS = !state.enableTTS;
     ttsIcon.textContent = state.enableTTS ? '🔊' : '🔇';
     ttsText.textContent = `Voice: ${state.enableTTS ? 'ON' : 'OFF'}`;
   });
 
-  // Mode Navigation Tabs
   modeTabs.forEach(tab => {
     tab.addEventListener('click', () => {
-      const mode = tab.dataset.mode;
-      switchMode(mode);
+      switchMode(tab.dataset.mode);
     });
   });
 
@@ -207,7 +206,7 @@ function initEventListeners() {
   btnClearAlphaHistory.addEventListener('click', () => {
     state.alphaHistory = [];
     renderAlphaHistory();
-    fetch('/api/reset_history', { method: 'POST' }).catch(() => {});
+    fetch('/api/reset_history', { method: 'POST' }).catch(() => { });
   });
 
   // Word Mode Actions
@@ -232,13 +231,13 @@ function initEventListeners() {
   });
   btnAddWordToSentence.addEventListener('click', () => {
     switchMode('sentence');
-    if (!state.sentenceWorkspace.style.display || state.sentenceWorkspace.style.display === 'none') {
-      initSentenceMode(3);
-    }
-    state.completedWords.push(state.assembledWord);
-    updateSentenceOutput();
-    showToast(`Word "${state.assembledWord}" added to sentence!`);
-  });
+      if (!sentenceWorkspace.style.display || sentenceWorkspace.style.display === 'none') {
+        initSentenceMode(3);
+      }
+      state.completedWords.push(state.assembledWord);
+      updateSentenceOutput();
+      showToast(`Word "${state.assembledWord}" added to sentence!`);
+    });
   btnNewWord.addEventListener('click', () => initWordMode(state.wordTargetLength));
 
   // Sentence Mode Actions
@@ -271,7 +270,6 @@ function initEventListeners() {
     if (e.target === guideModal) closeGuideModal();
   });
 
-  // Global Keyboard Shortcuts
   window.addEventListener('keydown', handleKeyNavigation);
 }
 
@@ -296,10 +294,10 @@ async function startCamera() {
       },
       audio: false
     };
-    
+
     state.stream = await navigator.mediaDevices.getUserMedia(constraints);
     videoEl.srcObject = state.stream;
-    
+
     await new Promise((resolve) => {
       videoEl.onloadedmetadata = () => {
         videoEl.play();
@@ -307,7 +305,6 @@ async function startCamera() {
       };
     });
 
-    // Resize overlay canvas to match video stream
     canvasEl.width = videoEl.videoWidth || 640;
     canvasEl.height = videoEl.videoHeight || 480;
 
@@ -320,7 +317,6 @@ async function startCamera() {
     detectionBadge.className = 'badge badge-success';
     detectionBadge.textContent = '🟢 Camera Running';
 
-    // Start Real-Time Processing Loop
     startProcessingLoop();
   } catch (err) {
     console.error('Camera access failed:', err);
@@ -347,22 +343,31 @@ function stopCamera() {
   detectionBadge.className = 'badge';
   detectionBadge.textContent = '⚪ Camera Off';
   fpsBadge.textContent = '0 FPS';
-  
-  // Clear canvas overlay
+
+  handleInferenceResult({
+    hand_detected: false,
+    letter: null,
+    smoothed_letter: '-',
+    confidence: 0.0,
+    top3: [],
+    landmarks: [],
+    bbox: null,
+    hand_count: 0,
+    hand_crop_base64: null
+  });
+
   ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 }
 
 function startProcessingLoop() {
-  // Capture & evaluate at 10-12 FPS for silky smoothness & low CPU load
   const offscreenCanvas = document.createElement('canvas');
   const offscreenCtx = offscreenCanvas.getContext('2d');
-  
+
   let isRequestPending = false;
 
   state.processingLoop = setInterval(async () => {
     if (!state.cameraActive || isRequestPending) return;
 
-    // Calculate FPS
     state.fpsCounter++;
     const now = performance.now();
     if (now - state.lastFpsTimestamp >= 1000) {
@@ -372,18 +377,17 @@ function startProcessingLoop() {
       state.lastFpsTimestamp = now;
     }
 
-    // Capture frame to base64
     offscreenCanvas.width = videoEl.videoWidth || 640;
     offscreenCanvas.height = videoEl.videoHeight || 480;
     offscreenCtx.drawImage(videoEl, 0, 0, offscreenCanvas.width, offscreenCanvas.height);
-    const base64Data = offscreenCanvas.toDataURL('image/jpeg', 0.7);
+    const base64Data = offscreenCanvas.toDataURL('image/jpeg', 0.65);
 
     isRequestPending = true;
     try {
       const resp = await fetch('/api/predict', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: base64Data, use_fallback: true })
+        body: JSON.stringify({ image: base64Data, use_fallback: false })
       });
 
       if (resp.ok) {
@@ -395,7 +399,7 @@ function startProcessingLoop() {
     } finally {
       isRequestPending = false;
     }
-  }, 90);
+}, 80);
 }
 
 function handleInferenceResult(data) {
@@ -404,597 +408,621 @@ function handleInferenceResult(data) {
   state.currentSmoothedLetter = data.smoothed_letter || '-';
   state.currentConfidence = data.confidence || 0.0;
   state.top3 = data.top3 || [];
-  state.handsCount = data.hand_count || (data.hand_detected ? 1 : 0);
-  
+  state.handsCount = data.hand_count || 0;
+
   // Update Isolated Hand Crop Thumbnail
   if (data.hand_crop_base64) {
     cropPreviewImg.src = data.hand_crop_base64;
     state.lastHandCrop = data.hand_crop_base64;
   }
 
-  // Update HUD status & badges
+  // Update Status Badges
   handsCountVal.textContent = state.handsCount;
+
   if (state.handDetected) {
     isolationState.className = 'badge badge-success';
-    isolationState.textContent = 'Body & Face Separated';
-    trackingStatus.textContent = 'Locked On Hand';
+    isolationState.textContent = 'Body & Face Filtered';
+    trackingStatus.textContent = `${state.handsCount} Hand(s) Locked`;
     detectionBadge.className = 'badge badge-success';
-    detectionBadge.textContent = `🟢 Hand Detected (${state.handsCount})`;
+    detectionBadge.textContent = `🟢 Hands Active (${state.handsCount})`;
   } else {
     isolationState.className = 'badge';
-    isolationState.textContent = 'Framing Zone Fallback';
-    trackingStatus.textContent = 'Waiting for hand...';
-    detectionBadge.className = 'badge badge-info';
-    detectionBadge.textContent = '🟡 Framing Zone';
+    isolationState.textContent = 'Idle (No Hands)';
+    trackingStatus.textContent = 'Show hands to camera';
+    detectionBadge.className = 'badge';
+    detectionBadge.textContent = '⚪ No Hands in Frame';
   }
 
-  // Update Real-Time Prediction Hero Box
-  heroLetter.textContent = state.currentSmoothedLetter;
-  const pct = Math.round(state.currentConfidence * 100);
-  confBadge.textContent = `${pct}% Conf`;
-  confidenceBar.style.width = `${pct}%`;
-  
-  if (state.currentSmoothedLetter !== '-') {
-    letterName.textContent = `Sign Recognized: ${state.currentSmoothedLetter}`;
-  } else {
-    letterName.textContent = 'Awaiting Sign...';
-  }
-
-  // Update Top-3 Pills
-  top3Row.innerHTML = '';
-  state.top3.forEach(item => {
-    const pill = document.createElement('span');
-    pill.className = 'top3-pill';
-    pill.textContent = `${item.letter}: ${Math.round(item.prob * 100)}%`;
-    top3Row.appendChild(pill);
-  });
-
-  // Draw overlay skeleton on canvas
-  drawHandLandmarks(data.landmarks, data.bbox);
-
-  // Dispatch live letter to active mode
-  dispatchLiveRecognition(state.currentSmoothedLetter, state.currentConfidence);
-}
-
-function drawHandLandmarks(landmarksList, bbox) {
-  ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
-  if (!state.showSkeleton) return;
-
-  const w = canvasEl.width;
-  const h = canvasEl.height;
-
-  // Draw bounding box around isolated hands
-  if (bbox && bbox.w > 0) {
-    ctx.save();
-    let bx1 = bbox.x1;
-    let bx2 = bbox.x2;
-    if (state.isMirrored) {
-      // Invert horizontal for mirror alignment
-      const temp1 = w - bx2;
-      const temp2 = w - bx1;
-      bx1 = temp1;
-      bx2 = temp2;
+    // Update Prediction Hero Box
+    if (state.handDetected && state.currentSmoothedLetter !== '-') {
+      heroLetter.textContent = state.currentSmoothedLetter;
+      const pct = Math.round(state.currentConfidence * 100);
+      confBadge.textContent = `${pct}% Conf`;
+      confidenceBar.style.width = `${pct}%`;
+      letterName.textContent = `Sign Recognized: ${state.currentSmoothedLetter}`;
+    } else {
+      heroLetter.textContent = '-';
+      confBadge.textContent = '0% Conf';
+      confidenceBar.style.width = '0%';
+      letterName.textContent = state.cameraActive
+        ? 'Awaiting Hands in Frame...'
+        : 'Camera is Off';
     }
-    ctx.strokeStyle = state.handDetected ? '#10b981' : 'rgba(99, 102, 241, 0.4)';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(bx1, bbox.y1, bx2 - bx1, bbox.h);
 
-    // Label
-    ctx.fillStyle = state.handDetected ? '#10b981' : '#818cf8';
-    ctx.font = 'bold 12px "Plus Jakarta Sans", sans-serif';
-    ctx.fillText(state.handDetected ? 'ISOLATED HAND' : 'FRAMING BOX', bx1 + 6, bbox.y1 - 6);
-    ctx.restore();
+    // Update Top-3 Pills
+    top3Row.innerHTML = '';
+    if (state.handDetected && state.top3.length > 0) {
+      state.top3.forEach(item => {
+        const pill = document.createElement('span');
+        pill.className = 'top3-pill';
+        pill.textContent = `${item.letter}: ${Math.round(item.prob * 100)}%`;
+        top3Row.appendChild(pill);
+      });
+    } else {
+      top3Row.innerHTML = '<span class="top3-pill">-</span><span class="top3-pill">-</span><span class="top3-pill">-</span>';
+    }
+
+    // Draw overlay skeleton on canvas
+    drawHandLandmarks(data.landmarks, data.bbox);
+
+    // Dispatch to active mode
+    dispatchLiveRecognition(state.currentSmoothedLetter, state.currentConfidence, state.handDetected);
   }
 
-  // Draw skeletal landmarks
-  if (landmarksList && landmarksList.length > 0) {
-    landmarksList.forEach((hand) => {
-      // Draw Connections (Bones)
-      ctx.strokeStyle = '#6366f1';
-      ctx.lineWidth = 3;
-      HAND_CONNECTIONS.forEach(([i, j]) => {
-        if (hand[i] && hand[j]) {
-          let x1 = hand[i].x * w;
-          let y1 = hand[i].y * h;
-          let x2 = hand[j].x * w;
-          let y2 = hand[j].y * h;
+  function drawHandLandmarks(landmarksList, bbox) {
+    ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
+    if (!state.showSkeleton) return;
 
-          if (state.isMirrored) {
-            x1 = w - x1;
-            x2 = w - x2;
-          }
+    const w = canvasEl.width;
+    const h = canvasEl.height;
 
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.stroke();
-        }
-      });
-
-      // Draw Landmark Points (Joints)
-      hand.forEach((lm) => {
-        let lx = lm.x * w;
-        let ly = lm.y * h;
+    // Draw bounding box around isolated hands
+      if (bbox && bbox.w > 0 && state.handDetected) {
+        ctx.save();
+        let bx1 = bbox.x1;
+        let bx2 = bbox.x2;
         if (state.isMirrored) {
-          lx = w - lx;
+          const temp1 = w - bx2;
+          const temp2 = w - bx1;
+          bx1 = temp1;
+          bx2 = temp2;
         }
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(bx1, bbox.y1, bx2 - bx1, bbox.h);
 
         ctx.fillStyle = '#10b981';
-        ctx.beginPath();
-        ctx.arc(lx, ly, 4, 0, 2 * Math.PI);
-        ctx.fill();
+        ctx.font = 'bold 12px "Plus Jakarta Sans", sans-serif';
+        ctx.fillText('ISOLATED HAND (FACE FILTERED)', bx1 + 6, Math.max(16, bbox.y1 - 6));
+        ctx.restore();
+      }
 
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
-        ctx.stroke();
+      // Draw skeletal landmarks
+      if (landmarksList && landmarksList.length > 0) {
+        landmarksList.forEach((hand) => {
+          // Draw Connections (Bones)
+          ctx.strokeStyle = '#6366f1';
+          ctx.lineWidth = 3;
+          HAND_CONNECTIONS.forEach(([i, j]) => {
+            if (hand[i] && hand[j]) {
+              let x1 = hand[i].x * w;
+              let y1 = hand[i].y * h;
+              let x2 = hand[j].x * w;
+              let y2 = hand[j].y * h;
+
+              if (state.isMirrored) {
+                x1 = w - x1;
+                x2 = w - x2;
+              }
+
+              ctx.beginPath();
+              ctx.moveTo(x1, y1);
+              ctx.lineTo(x2, y2);
+              ctx.stroke();
+            }
+          });
+
+          // Draw Landmark Points (Joints)
+          hand.forEach((lm) => {
+            let lx = lm.x * w;
+            let ly = lm.y * h;
+            if (state.isMirrored) {
+              lx = w - lx;
+            }
+
+            ctx.fillStyle = '#10b981';
+            ctx.beginPath();
+            ctx.arc(lx, ly, 4.5, 0, 2 * Math.PI);
+            ctx.fill();
+
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          });
+        });
+      }
+    }
+
+    /* ==========================================================
+       MODE SWITCHING & DISPATCH
+       ========================================================== */
+    function switchMode(newMode) {
+      state.activeMode = newMode;
+      modeTabs.forEach(t => {
+        t.classList.toggle('active', t.dataset.mode === newMode);
       });
-    });
-  }
-}
-
-/* ==========================================================
-   MODE SWITCHING & DISPATCH
-   ========================================================== */
-function switchMode(newMode) {
-  state.activeMode = newMode;
-  modeTabs.forEach(t => {
-    t.classList.toggle('active', t.dataset.mode === newMode);
-  });
-  paneAlphabet.classList.toggle('active', newMode === 'alphabet');
-  paneWord.classList.toggle('active', newMode === 'word');
-  paneSentence.classList.toggle('active', newMode === 'sentence');
-}
-
-function dispatchLiveRecognition(letter, confidence) {
-  if (state.activeMode === 'alphabet') {
-    updateAlphabetMode(letter, confidence);
-  } else if (state.activeMode === 'word') {
-    updateWordModePreview(letter, confidence);
-  } else if (state.activeMode === 'sentence') {
-    updateSentenceModePreview(letter, confidence);
-  }
-}
-
-/* ==========================================================
-   MODE 1: ALPHABET MODE
-   ========================================================== */
-function updateAlphabetMode(letter, confidence) {
-  if (!letter || letter === '-') return;
-
-  bigAlphaDisplay.textContent = letter;
-  
-  if (state.guideData && state.guideData[letter]) {
-    bigAlphaDesc.textContent = state.guideData[letter];
-  } else {
-    bigAlphaDesc.textContent = `Indian Sign Language letter "${letter}" (${Math.round(confidence * 100)}% accuracy)`;
-  }
-
-  // Append to history if stable and different from last
-  if (confidence > 0.45 && letter !== state.lastSpokenAlpha) {
-    state.alphaHistory.unshift({ letter, time: new Date().toLocaleTimeString() });
-    if (state.alphaHistory.length > 20) state.alphaHistory.pop();
-    renderAlphaHistory();
-
-    if (state.enableTTS) {
-      speakText(`Letter ${letter}`);
-    }
-    state.lastSpokenAlpha = letter;
-  }
-}
-
-function renderAlphaHistory() {
-  if (state.alphaHistory.length === 0) {
-    alphaHistoryContainer.innerHTML = '<span class="history-empty">Signs will appear here as you perform them...</span>';
-    return;
-  }
-
-  alphaHistoryContainer.innerHTML = '';
-  state.alphaHistory.forEach(item => {
-    const chip = document.createElement('span');
-    chip.className = 'history-chip';
-    chip.textContent = item.letter;
-    alphaHistoryContainer.appendChild(chip);
-  });
-}
-
-/* ==========================================================
-   MODE 2: WORD MODE (As requested by user)
-   "enter the number of alphabets in there, then for number 1,
-   keep doing the symbol and below it should keep interpreting it and save it,
-   then once the first letter is done, give next and do the second letter"
-   ========================================================== */
-function initWordMode(length) {
-  state.wordTargetLength = Math.max(1, Math.min(15, length));
-  state.activeWordSlotIndex = 0;
-  state.wordSlots = [];
-  state.assembledWord = '';
-
-  for (let i = 0; i < state.wordTargetLength; i++) {
-    state.wordSlots.push({
-      index: i + 1,
-      char: '',
-      locked: false
-    });
-  }
-
-  wordResultCard.style.display = 'none';
-  renderWordSlots();
-  updateWordActiveSlotHUD();
-}
-
-function renderWordSlots() {
-  wordSlotsContainer.innerHTML = '';
-  state.wordSlots.forEach((slot, idx) => {
-    const slotCard = document.createElement('div');
-    slotCard.className = 'slot-card';
-    if (idx === state.activeWordSlotIndex) {
-      slotCard.classList.add('active');
-    }
-    if (slot.locked) {
-      slotCard.classList.add('filled');
+      paneAlphabet.classList.toggle('active', newMode === 'alphabet');
+      paneWord.classList.toggle('active', newMode === 'word');
+      paneSentence.classList.toggle('active', newMode === 'sentence');
     }
 
-    const numEl = document.createElement('div');
-    numEl.className = 'slot-num';
-    numEl.textContent = `#${slot.index}`;
-
-    const charEl = document.createElement('div');
-    charEl.className = 'slot-char';
-    charEl.textContent = slot.char || (idx === state.activeWordSlotIndex ? '?' : '_');
-
-    slotCard.appendChild(numEl);
-    slotCard.appendChild(charEl);
-    
-    // Clicking slot selects it
-    slotCard.addEventListener('click', () => {
-      state.activeWordSlotIndex = idx;
-      renderWordSlots();
-      updateWordActiveSlotHUD();
-    });
-
-    wordSlotsContainer.appendChild(slotCard);
-  });
-}
-
-function updateWordActiveSlotHUD() {
-  const currentSlotNum = state.activeWordSlotIndex + 1;
-  activeSlotIndicator.textContent = `Active: Slot ${currentSlotNum} of ${state.wordTargetLength}`;
-  slotInterpretingVal.textContent = state.currentSmoothedLetter !== '-' ? state.currentSmoothedLetter : '?';
-  const conf = Math.round(state.currentConfidence * 100);
-  slotInterpretingConf.textContent = `(${conf}% conf)`;
-}
-
-function updateWordModePreview(letter, confidence) {
-  if (state.activeWordSlotIndex < state.wordTargetLength) {
-    slotInterpretingVal.textContent = letter !== '-' ? letter : '?';
-    const conf = Math.round(confidence * 100);
-    slotInterpretingConf.textContent = `(${conf}% conf)`;
-
-    // Live preview inside the active slot card if not yet locked
-    const activeSlot = state.wordSlots[state.activeWordSlotIndex];
-    if (activeSlot && !activeSlot.locked) {
-      const activeCard = wordSlotsContainer.children[state.activeWordSlotIndex];
-      if (activeCard) {
-        const charEl = activeCard.querySelector('.slot-char');
-        if (charEl) {
-          charEl.textContent = letter !== '-' ? letter : '?';
+      function dispatchLiveRecognition(letter, confidence, handDetected) {
+        if (state.activeMode === 'alphabet') {
+          updateAlphabetMode(letter, confidence, handDetected);
+        } else if (state.activeMode === 'word') {
+          updateWordModePreview(letter, confidence, handDetected);
+        } else if (state.activeMode === 'sentence') {
+          updateSentenceModePreview(letter, confidence, handDetected);
         }
       }
-    }
-  }
-}
 
-function saveActiveWordSlot() {
-  if (state.activeWordSlotIndex >= state.wordTargetLength) return;
+      /* ==========================================================
+         MODE 1: ALPHABET MODE
+         ========================================================== */
+        function updateAlphabetMode(letter, confidence, handDetected) {
+          if (!handDetected || !letter || letter === '-') {
+            bigAlphaDisplay.textContent = '?';
+            bigAlphaDesc.textContent = state.cameraActive
+              ? 'Perform an ISL sign with your hand in front of the camera.'
+              : 'Turn on camera to start interpreting.';
+            return;
+          }
 
-  const letterToSave = (state.currentSmoothedLetter && state.currentSmoothedLetter !== '-') 
-    ? state.currentSmoothedLetter 
-    : 'A';
+          bigAlphaDisplay.textContent = letter;
 
-  // Save into active slot
-  state.wordSlots[state.activeWordSlotIndex].char = letterToSave;
-  state.wordSlots[state.activeWordSlotIndex].locked = true;
+          if (state.guideData && state.guideData[letter]) {
+            bigAlphaDesc.textContent = state.guideData[letter];
+          } else {
+            bigAlphaDesc.textContent = `ISL letter "${letter}" (${Math.round(confidence * 100)}% confidence)`;
+          }
 
-  if (state.enableTTS) {
-    speakText(`Slot ${state.activeWordSlotIndex + 1}: ${letterToSave}`);
-  }
+            // Append to history if stable and confidence >= 0.45
+            if (confidence >= 0.45 && letter !== state.lastSpokenAlpha) {
+              state.alphaHistory.unshift({ letter, time: new Date().toLocaleTimeString() });
+              if (state.alphaHistory.length > 20) state.alphaHistory.pop();
+              renderAlphaHistory();
 
-  // Advance to next slot
-  state.activeWordSlotIndex++;
+              if (state.enableTTS) {
+                speakText(`Letter ${letter}`);
+              }
+              state.lastSpokenAlpha = letter;
+            }
+          }
 
-  if (state.activeWordSlotIndex >= state.wordTargetLength) {
-    // All slots completed!
-    finalizeWord();
-  } else {
-    renderWordSlots();
-    updateWordActiveSlotHUD();
-  }
-}
+          function renderAlphaHistory() {
+            if (state.alphaHistory.length === 0) {
+              alphaHistoryContainer.innerHTML = '<span class="history-empty">Signs will appear here as you perform them...</span>';
+              return;
+            }
 
-function prevActiveWordSlot() {
-  if (state.activeWordSlotIndex > 0) {
-    state.activeWordSlotIndex--;
-    state.wordSlots[state.activeWordSlotIndex].locked = false;
-    renderWordSlots();
-    updateWordActiveSlotHUD();
-  }
-}
+            alphaHistoryContainer.innerHTML = '';
+            state.alphaHistory.forEach(item => {
+              const chip = document.createElement('span');
+              chip.className = 'history-chip';
+              chip.textContent = item.letter;
+              alphaHistoryContainer.appendChild(chip);
+            });
+          }
 
-function finalizeWord() {
-  renderWordSlots();
-  state.assembledWord = state.wordSlots.map(s => s.char).join('');
-  assembledWordDisplay.textContent = state.assembledWord;
-  wordResultCard.style.display = 'flex';
-  activeSlotIndicator.textContent = `Word Completed (${state.wordTargetLength} Letters)`;
+          /* ==========================================================
+             MODE 2: WORD MODE
+             ========================================================== */
+          function initWordMode(length) {
+            state.wordTargetLength = Math.max(1, Math.min(15, length));
+            state.activeWordSlotIndex = 0;
+            state.wordSlots = [];
+            state.assembledWord = '';
 
-  if (state.enableTTS) {
-    speakText(`Completed Word: ${state.assembledWord}`);
-  }
-}
+            for (let i = 0; i < state.wordTargetLength; i++) {
+              state.wordSlots.push({
+                index: i + 1,
+                char: '',
+                locked: false
+              });
+            }
 
-/* ==========================================================
-   MODE 3: SENTENCE MODE
-   "same as words but instead of entering the letters we enter the words,
-   and per each word each letter give next."
-   ========================================================== */
-function initSentenceMode(targetWords) {
-  state.sentenceTargetWords = Math.max(1, Math.min(10, targetWords));
-  state.currentWordIndex = 0;
-  state.completedWords = [];
-  state.currentWordLetters = [];
-  state.fullSentence = '';
+            wordResultCard.style.display = 'none';
+            renderWordSlots();
+            updateWordActiveSlotHUD();
+          }
 
-  sentenceConfigBox.style.display = 'block';
-  sentenceWorkspace.style.display = 'flex';
+          function renderWordSlots() {
+            wordSlotsContainer.innerHTML = '';
+            state.wordSlots.forEach((slot, idx) => {
+              const slotCard = document.createElement('div');
+              slotCard.className = 'slot-card';
+              if (idx === state.activeWordSlotIndex) {
+                slotCard.classList.add('active');
+              }
+              if (slot.locked) {
+                slotCard.classList.add('filled');
+              }
 
-  renderSentenceBreadcrumbs();
-  renderSentenceWordSlots();
-  updateSentenceOutput();
-}
+              const numEl = document.createElement('div');
+              numEl.className = 'slot-num';
+              numEl.textContent = `#${slot.index}`;
 
-function renderSentenceBreadcrumbs() {
-  wordsBreadcrumbBar.innerHTML = '';
-  for (let i = 0; i < state.sentenceTargetWords; i++) {
-    const pill = document.createElement('div');
-    pill.className = 'word-breadcrumb-pill';
-    if (i === state.currentWordIndex) {
-      pill.classList.add('active');
-      pill.innerHTML = `<span>✏️</span> Word ${i + 1}`;
-    } else if (i < state.currentWordIndex) {
-      pill.classList.add('done');
-      pill.innerHTML = `<span>✅</span> ${state.completedWords[i] || `Word ${i + 1}`}`;
-    } else {
-      pill.innerHTML = `<span>⏳</span> Word ${i + 1}`;
-    }
-    wordsBreadcrumbBar.appendChild(pill);
-  }
-}
+              const charEl = document.createElement('div');
+              charEl.className = 'slot-char';
+              charEl.textContent = slot.char || (idx === state.activeWordSlotIndex ? '?' : '_');
 
-function renderSentenceWordSlots() {
-  activeWordTitle.textContent = `Building Word ${state.currentWordIndex + 1} of ${state.sentenceTargetWords}`;
-  wordLetterCountBadge.textContent = `Letters: ${state.currentWordLetters.length}`;
+              slotCard.appendChild(numEl);
+              slotCard.appendChild(charEl);
 
-  sentenceLetterSlots.innerHTML = '';
-  if (state.currentWordLetters.length === 0) {
-    const emptySlot = document.createElement('div');
-    emptySlot.className = 'slot-card active';
-    emptySlot.innerHTML = '<div class="slot-num">#1</div><div class="slot-char">?</div>';
-    sentenceLetterSlots.appendChild(emptySlot);
-  } else {
-    state.currentWordLetters.forEach((char, idx) => {
-      const slot = document.createElement('div');
-      slot.className = 'slot-card filled';
-      slot.innerHTML = `<div class="slot-num">#${idx + 1}</div><div class="slot-char">${char}</div>`;
-      sentenceLetterSlots.appendChild(slot);
-    });
-    // Active next slot
-    const activeSlot = document.createElement('div');
-    activeSlot.className = 'slot-card active';
-    activeSlot.innerHTML = `<div class="slot-num">#${state.currentWordLetters.length + 1}</div><div class="slot-char">?</div>`;
-    sentenceLetterSlots.appendChild(activeSlot);
-  }
-}
+              slotCard.addEventListener('click', () => {
+                state.activeWordSlotIndex = idx;
+                renderWordSlots();
+                updateWordActiveSlotHUD();
+              });
 
-function updateSentenceModePreview(letter) {
-  sentenceInterpretingVal.textContent = letter !== '-' ? letter : '?';
-  // Update the active slot text
-  const activeCard = sentenceLetterSlots.querySelector('.slot-card.active');
-  if (activeCard) {
-    const charEl = activeCard.querySelector('.slot-char');
-    if (charEl) {
-      charEl.textContent = letter !== '-' ? letter : '?';
-    }
-  }
-}
+              wordSlotsContainer.appendChild(slotCard);
+            });
+          }
 
-function saveSentenceLetter() {
-  const letterToSave = (state.currentSmoothedLetter && state.currentSmoothedLetter !== '-') 
-    ? state.currentSmoothedLetter 
-    : 'A';
+          function updateWordActiveSlotHUD() {
+            const currentSlotNum = state.activeWordSlotIndex + 1;
+            activeSlotIndicator.textContent = `Active: Slot ${currentSlotNum} of ${state.wordTargetLength}`;
 
-  state.currentWordLetters.push(letterToSave);
-  if (state.enableTTS) {
-    speakText(letterToSave);
-  }
-  renderSentenceWordSlots();
-}
+            if (state.handDetected && state.currentSmoothedLetter !== '-') {
+              slotInterpretingVal.textContent = state.currentSmoothedLetter;
+              const conf = Math.round(state.currentConfidence * 100);
+              slotInterpretingConf.textContent = `(${conf}% conf)`;
+            } else {
+              slotInterpretingVal.textContent = '-';
+              slotInterpretingConf.textContent = '(Awaiting Hand)';
+            }
+          }
 
-function backSentenceLetter() {
-  if (state.currentWordLetters.length > 0) {
-    state.currentWordLetters.pop();
-    renderSentenceWordSlots();
-  }
-}
+            function updateWordModePreview(letter, confidence, handDetected) {
+              if (state.activeWordSlotIndex < state.wordTargetLength) {
+                if (handDetected && letter !== '-') {
+                  slotInterpretingVal.textContent = letter;
+                  const conf = Math.round(confidence * 100);
+                  slotInterpretingConf.textContent = `(${conf}% conf)`;
 
-function completeCurrentWordAndAdvance() {
-  if (state.currentWordLetters.length === 0) {
-    showToast('Add at least one letter to this word before advancing.');
-    return;
-  }
+                        const activeSlot = state.wordSlots[state.activeWordSlotIndex];
+                        if (activeSlot && !activeSlot.locked) {
+                          const activeCard = wordSlotsContainer.children[state.activeWordSlotIndex];
+                          if (activeCard) {
+                            const charEl = activeCard.querySelector('.slot-char');
+                            if (charEl) charEl.textContent = letter;
+                          }
+                        }
+                      } else {
+                        slotInterpretingVal.textContent = '-';
+                        slotInterpretingConf.textContent = '(Awaiting Hand)';
+                        const activeSlot = state.wordSlots[state.activeWordSlotIndex];
+                        if (activeSlot && !activeSlot.locked) {
+                          const activeCard = wordSlotsContainer.children[state.activeWordSlotIndex];
+                          if (activeCard) {
+                            const charEl = activeCard.querySelector('.slot-char');
+                            if (charEl) charEl.textContent = '?';
+                          }
+                        }
+                      }
+                    }
+                  }
 
-  const word = state.currentWordLetters.join('');
-  state.completedWords.push(word);
-  state.currentWordLetters = [];
-  state.currentWordIndex++;
+                  function saveActiveWordSlot() {
+                    if (state.activeWordSlotIndex >= state.wordTargetLength) return;
 
-  if (state.enableTTS) {
-    speakText(`Word: ${word}`);
-  }
+                    if (!state.handDetected || !state.currentSmoothedLetter || state.currentSmoothedLetter === '-') {
+                      showToast('Show your hand to the camera to interpret a sign first!');
+                      return;
+                    }
 
-  updateSentenceOutput();
+                    const letterToSave = state.currentSmoothedLetter;
+                    state.wordSlots[state.activeWordSlotIndex].char = letterToSave;
+                    state.wordSlots[state.activeWordSlotIndex].locked = true;
 
-  if (state.currentWordIndex >= state.sentenceTargetWords) {
-    // Sentence completed!
-    renderSentenceBreadcrumbs();
-    activeWordTitle.textContent = '🎉 All Words Completed!';
-    sentenceLetterSlots.innerHTML = '';
-    if (state.enableTTS) {
-      setTimeout(() => speakText(`Complete sentence: ${state.fullSentence}`), 800);
-    }
-  } else {
-    renderSentenceBreadcrumbs();
-    renderSentenceWordSlots();
-  }
-}
+                    if (state.enableTTS) {
+                      speakText(`Slot ${state.activeWordSlotIndex + 1}: ${letterToSave}`);
+                    }
 
-function updateSentenceOutput() {
-  state.fullSentence = state.completedWords.join(' ');
-  if (state.fullSentence) {
-    fullSentenceDisplay.textContent = state.fullSentence;
-    sentenceCharCount.textContent = `${state.fullSentence.length} characters (${state.completedWords.length} words)`;
-  } else {
-    fullSentenceDisplay.textContent = 'Your sentence will appear here as words are completed...';
-    sentenceCharCount.textContent = '0 characters';
-  }
-}
+                    state.activeWordSlotIndex++;
 
-/* ==========================================================
-   TEXT TO SPEECH (TTS) & AUDIO
-   ========================================================== */
-function speakText(text) {
-  if (!state.enableTTS || !text) return;
+                    if (state.activeWordSlotIndex >= state.wordTargetLength) {
+                      finalizeWord();
+                    } else {
+                      renderWordSlots();
+                      updateWordActiveSlotHUD();
+                    }
+                  }
 
-  if ('speechSynthesis' in window) {
-    window.speechSynthesis.cancel(); // Stop prior speech
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    utterance.lang = 'en-IN'; // Indian English pronunciation
-    window.speechSynthesis.speak(utterance);
-  }
-}
+                  function prevActiveWordSlot() {
+                    if (state.activeWordSlotIndex > 0) {
+                      state.activeWordSlotIndex--;
+                      state.wordSlots[state.activeWordSlotIndex].locked = false;
+                      renderWordSlots();
+                      updateWordActiveSlotHUD();
+                    }
+                  }
 
-/* ==========================================================
-   KEYBOARD SHORTCUTS
-   ========================================================== */
-function handleKeyNavigation(e) {
-  // If typing in an input field, do not hijack keys
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+                  function finalizeWord() {
+                    renderWordSlots();
+                    state.assembledWord = state.wordSlots.map(s => s.char).join('');
+                    assembledWordDisplay.textContent = state.assembledWord;
+                    wordResultCard.style.display = 'flex';
+                    activeSlotIndicator.textContent = `Word Completed (${state.wordTargetLength} Letters)`;
 
-  if (e.code === 'Space') {
-    e.preventDefault();
-    if (state.activeMode === 'word') {
-      saveActiveWordSlot();
-    } else if (state.activeMode === 'sentence') {
-      saveSentenceLetter();
-    }
-  } else if (e.code === 'Backspace') {
-    if (state.activeMode === 'word') {
-      e.preventDefault();
-      prevActiveWordSlot();
-    } else if (state.activeMode === 'sentence') {
-      e.preventDefault();
-      backSentenceLetter();
-    }
-  } else if (e.code === 'Enter') {
-    if (state.activeMode === 'sentence') {
-      e.preventDefault();
-      completeCurrentWordAndAdvance();
-    }
-  } else if (e.key.toLowerCase() === 'c' && !e.ctrlKey) {
-    if (state.activeMode === 'alphabet') {
-      state.alphaHistory = [];
-      renderAlphaHistory();
-    }
-  } else if (e.key === 'Escape') {
-    closeGuideModal();
-  }
-}
+                    if (state.enableTTS) {
+                      speakText(`Completed Word: ${state.assembledWord}`);
+                    }
+                  }
 
-/* ==========================================================
-   SYSTEM INFO & ISL GUIDE MODAL
-   ========================================================== */
-async function fetchSystemInfo() {
-  try {
-    const res = await fetch('/api/info');
-    if (res.ok) {
-      const info = await res.json();
-      const modelStatusText = document.getElementById('modelStatusText');
-      if (modelStatusText) {
-        modelStatusText.textContent = `Model Ready (${info.num_classes} Classes &bull; ${info.accuracy}% Acc)`;
-      }
-    }
-  } catch (err) {
-    console.warn('Info endpoint unavailable:', err);
-  }
+                  /* ==========================================================
+                     MODE 3: SENTENCE MODE
+                     ========================================================== */
+                  function initSentenceMode(targetWords) {
+                    state.sentenceTargetWords = Math.max(1, Math.min(10, targetWords));
+                    state.currentWordIndex = 0;
+                    state.completedWords = [];
+                    state.currentWordLetters = [];
+                    state.fullSentence = '';
 
-  // Pre-fetch reference guide
-  try {
-    const res2 = await fetch('/api/reference');
-    if (res2.ok) {
-      state.guideData = await res2.json();
-      renderGuideModal();
-    }
-  } catch (err) {
-    console.warn('Guide endpoint unavailable:', err);
-  }
-}
+                    sentenceConfigBox.style.display = 'block';
+                    sentenceWorkspace.style.display = 'flex';
 
-function openGuideModal() {
-  guideModal.classList.add('open');
-}
+                    renderSentenceBreadcrumbs();
+                    renderSentenceWordSlots();
+                    updateSentenceOutput();
+                  }
 
-function closeGuideModal() {
-  guideModal.classList.remove('open');
-}
+                  function renderSentenceBreadcrumbs() {
+                    wordsBreadcrumbBar.innerHTML = '';
+                    for (let i = 0; i < state.sentenceTargetWords; i++) {
+                      const pill = document.createElement('div');
+                      pill.className = 'word-breadcrumb-pill';
+                      if (i === state.currentWordIndex) {
+                        pill.classList.add('active');
+                        pill.innerHTML = `<span>✏️</span> Word ${i + 1}`;
+                      } else if (i < state.currentWordIndex) {
+                        pill.classList.add('done');
+                        pill.innerHTML = `<span>✅</span> ${state.completedWords[i] || `Word ${i + 1}`}`;
+                      } else {
+                        pill.innerHTML = `<span>⏳</span> Word ${i + 1}`;
+                      }
+                      wordsBreadcrumbBar.appendChild(pill);
+                    }
+                  }
 
-function renderGuideModal() {
-  if (!state.guideData) return;
-  guideGrid.innerHTML = '';
-  
-  Object.keys(state.guideData).sort().forEach(letter => {
-    const desc = state.guideData[letter];
-    const card = document.createElement('div');
-    card.className = 'guide-card';
-    card.innerHTML = `
+                  function renderSentenceWordSlots() {
+                    activeWordTitle.textContent = `Building Word ${state.currentWordIndex + 1} of ${state.sentenceTargetWords}`;
+                    wordLetterCountBadge.textContent = `Letters: ${state.currentWordLetters.length}`;
+
+                    sentenceLetterSlots.innerHTML = '';
+                    if (state.currentWordLetters.length === 0) {
+                      const emptySlot = document.createElement('div');
+                      emptySlot.className = 'slot-card active';
+                      emptySlot.innerHTML = '<div class="slot-num">#1</div><div class="slot-char">?</div>';
+                      sentenceLetterSlots.appendChild(emptySlot);
+                    } else {
+                      state.currentWordLetters.forEach((char, idx) => {
+                        const slot = document.createElement('div');
+                        slot.className = 'slot-card filled';
+                        slot.innerHTML = `<div class="slot-num">#${idx + 1}</div><div class="slot-char">${char}</div>`;
+                        sentenceLetterSlots.appendChild(slot);
+                      });
+                      const activeSlot = document.createElement('div');
+                      activeSlot.className = 'slot-card active';
+                      activeSlot.innerHTML = `<div class="slot-num">#${state.currentWordLetters.length + 1}</div><div class="slot-char">?</div>`;
+                      sentenceLetterSlots.appendChild(activeSlot);
+                    }
+                  }
+
+                        function updateSentenceModePreview(letter, confidence, handDetected) {
+                          if (handDetected && letter !== '-') {
+                            sentenceInterpretingVal.textContent = letter;
+                            const activeCard = sentenceLetterSlots.querySelector('.slot-card.active');
+                            if (activeCard) {
+                              const charEl = activeCard.querySelector('.slot-char');
+                              if (charEl) charEl.textContent = letter;
+                            }
+                          } else {
+                            sentenceInterpretingVal.textContent = '-';
+                            const activeCard = sentenceLetterSlots.querySelector('.slot-card.active');
+                            if (activeCard) {
+                              const charEl = activeCard.querySelector('.slot-char');
+                              if (charEl) charEl.textContent = '?';
+                            }
+                          }
+                        }
+
+                        function saveSentenceLetter() {
+                          if (!state.handDetected || !state.currentSmoothedLetter || state.currentSmoothedLetter === '-') {
+                            showToast('Show your hand to the camera to interpret a sign first!');
+                            return;
+                          }
+
+                          const letterToSave = state.currentSmoothedLetter;
+                          state.currentWordLetters.push(letterToSave);
+                          if (state.enableTTS) {
+                            speakText(letterToSave);
+                          }
+                          renderSentenceWordSlots();
+                        }
+
+                        function backSentenceLetter() {
+                          if (state.currentWordLetters.length > 0) {
+                            state.currentWordLetters.pop();
+                            renderSentenceWordSlots();
+                          }
+                        }
+
+                        function completeCurrentWordAndAdvance() {
+                          if (state.currentWordLetters.length === 0) {
+                            showToast('Add at least one letter to this word before advancing.');
+                            return;
+                          }
+
+                          const word = state.currentWordLetters.join('');
+                          state.completedWords.push(word);
+                          state.currentWordLetters = [];
+                          state.currentWordIndex++;
+
+                          if (state.enableTTS) {
+                            speakText(`Word: ${word}`);
+                          }
+
+                          updateSentenceOutput();
+
+                          if (state.currentWordIndex >= state.sentenceTargetWords) {
+                            renderSentenceBreadcrumbs();
+                            activeWordTitle.textContent = '🎉 All Words Completed!';
+                            sentenceLetterSlots.innerHTML = '';
+                            if (state.enableTTS) {
+                              setTimeout(() => speakText(`Complete sentence: ${state.fullSentence}`), 800);
+                            }
+                          } else {
+                            renderSentenceBreadcrumbs();
+                            renderSentenceWordSlots();
+                          }
+                        }
+
+                        function updateSentenceOutput() {
+                          state.fullSentence = state.completedWords.join(' ');
+                          if (state.fullSentence) {
+                            fullSentenceDisplay.textContent = state.fullSentence;
+                            sentenceCharCount.textContent = `${state.fullSentence.length} characters (${state.completedWords.length} words)`;
+                          } else {
+                            fullSentenceDisplay.textContent = 'Your sentence will appear here as words are completed...';
+                            sentenceCharCount.textContent = '0 characters';
+                          }
+                        }
+
+                        /* ==========================================================
+                           TEXT TO SPEECH (TTS) & AUDIO
+                           ========================================================== */
+                        function speakText(text) {
+                          if (!state.enableTTS || !text) return;
+
+                          if ('speechSynthesis' in window) {
+                            window.speechSynthesis.cancel();
+                            const utterance = new SpeechSynthesisUtterance(text);
+                            utterance.rate = 1.0;
+                            utterance.pitch = 1.0;
+                            utterance.lang = 'en-IN';
+                            window.speechSynthesis.speak(utterance);
+                          }
+                        }
+
+                        /* ==========================================================
+                           KEYBOARD SHORTCUTS
+                           ========================================================== */
+                        function handleKeyNavigation(e) {
+                          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+                          if (e.code === 'Space') {
+                            e.preventDefault();
+                            if (state.activeMode === 'word') {
+                              saveActiveWordSlot();
+                            } else if (state.activeMode === 'sentence') {
+                              saveSentenceLetter();
+                            }
+                          } else if (e.code === 'Backspace') {
+                            if (state.activeMode === 'word') {
+                              e.preventDefault();
+                              prevActiveWordSlot();
+                            } else if (state.activeMode === 'sentence') {
+                              e.preventDefault();
+                              backSentenceLetter();
+                            }
+                          } else if (e.code === 'Enter') {
+                            if (state.activeMode === 'sentence') {
+                              e.preventDefault();
+                              completeCurrentWordAndAdvance();
+                            }
+                          } else if (e.key.toLowerCase() === 'c' && !e.ctrlKey) {
+                            if (state.activeMode === 'alphabet') {
+                              state.alphaHistory = [];
+                              renderAlphaHistory();
+                            }
+                          } else if (e.key === 'Escape') {
+                            closeGuideModal();
+                          }
+                        }
+
+                        /* ==========================================================
+                           SYSTEM INFO & ISL GUIDE MODAL
+                           ========================================================== */
+                        async function fetchSystemInfo() {
+                          try {
+                            const res = await fetch('/api/info');
+                            if (res.ok) {
+                              const info = await res.json();
+                              const modelStatusText = document.getElementById('modelStatusText');
+                              if (modelStatusText) {
+                                modelStatusText.textContent = `Landmark Model Ready (26 Classes &bull; ${info.accuracy}% Acc)`;
+                              }
+                            }
+                          } catch (err) {
+                            console.warn('Info endpoint unavailable:', err);
+                          }
+
+                          try {
+                            const res2 = await fetch('/api/reference');
+                            if (res2.ok) {
+                              state.guideData = await res2.json();
+                              renderGuideModal();
+                            }
+                          } catch (err) {
+                            console.warn('Guide endpoint unavailable:', err);
+                          }
+                        }
+
+                        function openGuideModal() {
+                          guideModal.classList.add('open');
+                        }
+
+                        function closeGuideModal() {
+                          guideModal.classList.remove('open');
+                        }
+
+                        function renderGuideModal() {
+                          if (!state.guideData) return;
+                          guideGrid.innerHTML = '';
+
+                          Object.keys(state.guideData).sort().forEach(letter => {
+                            const desc = state.guideData[letter];
+                            const card = document.createElement('div');
+                            card.className = 'guide-card';
+                            card.innerHTML = `
       <div class="guide-letter">${letter}</div>
       <div class="guide-desc">${desc}</div>
     `;
-    guideGrid.appendChild(card);
-  });
-}
+                            guideGrid.appendChild(card);
+                          });
+                        }
 
-function showToast(msg) {
-  // Simple non-intrusive toast notification
-  const toast = document.createElement('div');
-  toast.style.position = 'fixed';
-  toast.style.bottom = '24px';
-  toast.style.right = '24px';
-  toast.style.background = '#10b981';
-  toast.style.color = '#fff';
-  toast.style.padding = '10px 18px';
-  toast.style.borderRadius = '8px';
-  toast.style.fontWeight = '600';
-  toast.style.fontSize = '0.9rem';
-  toast.style.boxShadow = '0 8px 24px rgba(0,0,0,0.4)';
-  toast.style.zIndex = '9999';
-  toast.style.transition = 'opacity 0.3s ease';
-  toast.textContent = msg;
+                        function showToast(msg) {
+                          const toast = document.createElement('div');
+                          toast.style.position = 'fixed';
+                          toast.style.bottom = '24px';
+                          toast.style.right = '24px';
+                          toast.style.background = '#10b981';
+                          toast.style.color = '#fff';
+                          toast.style.padding = '10px 18px';
+                          toast.style.borderRadius = '8px';
+                          toast.style.fontWeight = '600';
+                          toast.style.fontSize = '0.9rem';
+                          toast.style.boxShadow = '0 8px 24px rgba(0,0,0,0.4)';
+                          toast.style.zIndex = '9999';
+                          toast.style.transition = 'opacity 0.3s ease';
+                          toast.textContent = msg;
 
-  document.body.appendChild(toast);
-  setTimeout(() => {
-    toast.style.opacity = '0';
-    setTimeout(() => toast.remove(), 300);
-  }, 2200);
-}
-
+                          document.body.appendChild(toast);
+                          setTimeout(() => {
+                            toast.style.opacity = '0';
+                            setTimeout(() => toast.remove(), 300);
+                          }, 2200);
+                        }

@@ -66,13 +66,14 @@ ISL_ALPHABET_GUIDE = {
 @app.get("/api/info")
 def get_info():
     return {
-        "model_name": "ISL Multi-Layer Perceptron (HOG + Hand Isolation)",
+        "model_name": "ISL 3D Landmark Geometric Neural Model",
         "classes": isl_service.classes,
         "num_classes": len(isl_service.classes),
         "accuracy": round(isl_service.accuracy * 100, 2),
         "detector_available": isl_service.detector is not None,
         "features": [
-            "Hand Isolation from Face & Body via MediaPipe",
+            "Hand Isolation from Face & Body via MediaPipe 3D Landmarks",
+            "Zero False Positives: Silent Idle State when Hands are Out of Frame",
             "Real-Time Alphabet Mode with Confidence Gauging",
             "Interactive Word Mode with Letter Slot Progression",
             "Full Sentence Mode with Multi-Word Assembly",

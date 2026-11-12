@@ -11,9 +11,10 @@ A real-time Indian Sign Language (ISL) recognition and translation system design
    - Specifically isolates the human hands and gesture shapes, rejecting faces, clothing, and background interference.
    - Includes a real-time **Hand Isolation Monitor** panel displaying the cropped hand stream directly in the interface.
 
-2. **Trained ISL Recognition Model (96.41% Accuracy)**:
-   - Trained across 26 Indian Sign Language classes (A through Z) using extensive ISL datasets.
-   - Utilizes Histogram of Oriented Gradients (HOG) combined with a deep Multi-Layer Perceptron (MLP) neural classifier.
+2. **Trained 3D Landmark ISL Model (93.1% Accuracy)**:
+   - Trained across all 26 Indian Sign Language classes (A through Z) using 154 scale- and translation-invariant geometric landmark features.
+   - Extracts finger curl ratios, inter-fingertip distances, and dual-hand interaction distances.
+   - **Zero False Positives**: Strictly enforces a silent idle state when hands are out of the camera frame or in motion. No random letters are ever guessed when hands are absent!
    - Real-time temporal smoothing and majority-voting debouncing to eliminate flickering.
 
 3. **Three Core Operational Modes**:

@@ -22,11 +22,11 @@ def main():
     print("=" * 65)
 
     # Check model file
-    if not os.path.exists("isl_model.joblib"):
-        print("\n[Notice] Trained model 'isl_model.joblib' not found!")
-        print("[Notice] Running train.py to train the model first...")
+    if not os.path.exists("isl_landmark_model.joblib"):
+        print("\n[Notice] Trained model 'isl_landmark_model.joblib' not found!")
+        print("[Notice] Running train_landmarks.py to train the model first...")
         import subprocess
-        subprocess.run([sys.executable, "-u", "train.py"])
+        subprocess.run([sys.executable, "-u", "train_landmarks.py"])
 
     # Launch browser in a background thread
     threading.Thread(target=open_browser, daemon=True).start()
