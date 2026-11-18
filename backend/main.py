@@ -2,7 +2,7 @@ import os
 import base64
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
@@ -123,5 +123,18 @@ def serve_index():
     index_path = os.path.join(static_dir, "index.html")
     if os.path.exists(index_path):
         return FileResponse(index_path)
-    return {"message": "ISL Interpreter API is running. index.html not yet created."}
+    return {"message": "ISL Interpreter API is running."}
+
+@app.get("/learning", include_in_schema=False)
+@app.get("/learning/", include_in_schema=False)
+@app.get("/learning.html", include_in_schema=False)
+def serve_learning():
+    learning_path = os.path.join(static_dir, "learning.html")
+    if os.path.exists(learning_path):
+        return FileResponse(learning_path)
+    return FileResponse(os.path.join(static_dir, "index.html"))
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 

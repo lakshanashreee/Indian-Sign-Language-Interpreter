@@ -1,24 +1,4 @@
-# Byte-compiled / optimized / DLL files
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Large training raw datasets (Model weights are already pre-trained & packaged in isl_landmark_model.joblib)
-dataset_ISL/
-ISL_Dataset/
-isl_model.joblib
-
-# Environments
-env/
-venv/
-.venv/
-ENV/
-
-# OS / Editor files
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
-*.log
-scratch/
+*.pyc
+features_cache_18k.joblib
 

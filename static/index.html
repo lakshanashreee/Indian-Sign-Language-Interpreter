@@ -3,10 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Indian Sign Language (ISL) Interpreter</title>
+  <title>Indian Sign Language (ISL) Real-Time Interpreter</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -14,10 +14,21 @@
     <!-- Header -->
     <header class="app-header">
       <div class="header-left">
-        <div class="logo-icon">🤟</div>
+        <div class="brand-mark">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M18 11V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v0"/>
+            <path d="M14 10V4a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v2"/>
+            <path d="M10 10.5V6a2 2 0 0 0-2-2v0a2 2 0 0 0-2 2v8"/>
+            <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+          </svg>
+        </div>
         <div>
-          <h1 class="logo-title">ISL Interpreter <span class="badge-tag">AI Powered</span></h1>
-          <p class="logo-subtitle">Real-Time Indian Sign Language Translation &bull; Hand-Face Separation &bull; 96.4% Acc</p>
+          <div class="brand-title-row">
+            <h1 class="logo-title">ISL Interpreter</h1>
+            <span class="badge-tag">ISL 2.0</span>
+            <span class="latency-badge" id="latencyBadge">0 ms</span>
+          </div>
+          <p class="logo-subtitle">Real-Time Indian Sign Language Translation &bull; 3D Hand Isolation &bull; 26 Classes</p>
         </div>
       </div>
       <div class="header-actions">
@@ -25,11 +36,17 @@
           <span class="status-dot"></span>
           <span id="modelStatusText">Model Ready (26 Classes)</span>
         </div>
+        <a href="/learning" class="btn btn-secondary" style="text-decoration: none;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          Learning Corner
+        </a>
         <button class="btn btn-secondary" id="btnOpenGuide">
-          <span>📖</span> ISL Guide
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+          Quick Reference
         </button>
         <button class="btn btn-secondary" id="btnToggleTTS">
-          <span id="ttsIcon">🔊</span> <span id="ttsText">Voice: ON</span>
+          <svg id="ttsSvgIcon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+          <span id="ttsText">Audio: ON</span>
         </button>
       </div>
     </header>
@@ -40,10 +57,11 @@
       <section class="camera-card">
         <div class="card-header">
           <div class="card-title">
-            <span>📹</span> Live Video Stream
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+            Live Camera Stream
           </div>
           <div class="stream-indicators">
-            <span class="badge" id="detectionBadge">⚪ Camera Off</span>
+            <span class="badge" id="detectionBadge"><span class="badge-dot"></span> <span id="detectionText">Camera Off</span></span>
             <span class="badge badge-info" id="fpsBadge">0 FPS</span>
           </div>
         </div>
@@ -54,31 +72,37 @@
           <canvas id="overlayCanvas"></canvas>
           <div class="camera-overlay-placeholder" id="cameraPlaceholder">
             <div class="placeholder-content">
-              <div class="placeholder-icon">📷</div>
-              <h3>Camera is Turned Off</h3>
-              <p>Click "Turn On Camera" below to start real-time Indian Sign Language interpretation.</p>
-              <button class="btn btn-primary" id="btnPlaceholderStartCam">Turn On Camera</button>
+              <div class="placeholder-icon">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+              </div>
+              <h3>Camera Inactive</h3>
+              <p>Click "Start Camera" to initialize high-speed Indian Sign Language tracking.</p>
+              <button class="btn btn-primary" id="btnPlaceholderStartCam">Start Camera</button>
             </div>
           </div>
           <!-- Framing Target Box overlay -->
           <div class="framing-box" id="framingBox">
-            <div class="framing-label">Sign Framing Zone</div>
+            <div class="framing-label">Sign Zone</div>
           </div>
         </div>
 
         <!-- Camera Controls Toolbar -->
         <div class="camera-toolbar">
           <button class="btn btn-primary" id="btnToggleCamera">
-            <span id="camBtnIcon">▶️</span> <span id="camBtnText">Turn On Camera</span>
+            <svg id="camBtnSvg" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            <span id="camBtnText">Start Camera</span>
           </button>
           <button class="btn btn-secondary" id="btnToggleSkeleton">
-            <span>🦴</span> Skeleton: ON
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><circle cx="6" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><line x1="8" y1="7" x2="10" y2="10"/><line x1="16" y1="7" x2="14" y2="10"/><line x1="8" y1="17" x2="10" y2="14"/><line x1="16" y1="17" x2="14" y2="14"/></svg>
+            <span id="skeletonBtnText">Skeleton: ON</span>
           </button>
           <button class="btn btn-secondary" id="btnToggleBox">
-            <span>🎯</span> Guide Box: ON
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="3"/></svg>
+            <span id="boxBtnText">Guide Box: OFF</span>
           </button>
           <button class="btn btn-secondary" id="btnFlipCam">
-            <span>🔄</span> Mirror
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+            Mirror View
           </button>
         </div>
 
@@ -92,21 +116,22 @@
             </div>
             <div class="isolation-preview-row">
               <div class="crop-preview-box">
+                <canvas id="cropCanvas" width="120" height="120" style="display:none;"></canvas>
                 <img id="cropPreviewImg" src="/static/placeholder_hand.png" alt="Isolated Hand Crop">
                 <div class="crop-caption">Body & Face Removed</div>
               </div>
               <div class="isolation-details">
                 <div class="metric-row">
-                  <span class="label">Hands Detected:</span>
-                  <span class="val" id="handsCountVal">0</span>
+                  <span class="label">Hands Tracked:</span>
+                  <span class="val font-mono" id="handsCountVal">0</span>
                 </div>
                 <div class="metric-row">
-                  <span class="label">Detection Mode:</span>
+                  <span class="label">Kinematics:</span>
                   <span class="val highlight">MediaPipe 3D</span>
                 </div>
                 <div class="metric-row">
-                  <span class="label">Hand Tracking:</span>
-                  <span class="val" id="trackingStatus">Active</span>
+                  <span class="label">Inference Mode:</span>
+                  <span class="val" id="trackingStatus">Standby</span>
                 </div>
               </div>
             </div>
@@ -115,20 +140,20 @@
           <!-- Real-Time Sign Prediction Hero Box -->
           <div class="hud-box prediction-hero">
             <div class="hud-box-header">
-              <span>Live Recognition</span>
-              <span class="conf-badge" id="confBadge">0.0%</span>
+              <span>Live Interpretation</span>
+              <span class="conf-badge font-mono" id="confBadge">0% Conf</span>
             </div>
             <div class="hero-letter-row">
-              <div class="hero-letter" id="heroLetter">-</div>
+              <div class="hero-letter font-mono" id="heroLetter">-</div>
               <div class="hero-letter-meta">
-                <div class="meta-title" id="letterName">Awaiting Sign...</div>
+                <div class="meta-title" id="letterName">Awaiting Hand In Frame...</div>
                 <div class="confidence-bar-wrapper">
                   <div class="confidence-bar" id="confidenceBar" style="width: 0%;"></div>
                 </div>
                 <div class="top3-row" id="top3Row">
-                  <span class="top3-pill">-</span>
-                  <span class="top3-pill">-</span>
-                  <span class="top3-pill">-</span>
+                  <span class="top3-pill font-mono">-</span>
+                  <span class="top3-pill font-mono">-</span>
+                  <span class="top3-pill font-mono">-</span>
                 </div>
               </div>
             </div>
@@ -141,13 +166,13 @@
         <!-- Mode Tabs -->
         <div class="mode-tabs">
           <button class="mode-tab active" data-mode="alphabet">
-            <span class="tab-icon">🔤</span> Alphabet Mode
+            Alphabet Mode
           </button>
           <button class="mode-tab" data-mode="word">
-            <span class="tab-icon">📝</span> Word Mode
+            Word Builder
           </button>
           <button class="mode-tab" data-mode="sentence">
-            <span class="tab-icon">💬</span> Sentence Mode
+            Sentence Mode
           </button>
         </div>
 
@@ -155,19 +180,21 @@
         <div class="tab-pane active" id="paneAlphabet">
           <div class="pane-intro">
             <h3>Alphabet Interpreter</h3>
-            <p>Perform any Indian Sign Language alphabet gesture. The system automatically tracks your hands, separates your face and body, and interprets the sign cleanly.</p>
+            <p>Perform any Indian Sign Language alphabet sign. The system isolates hand kinematics from face and clothing, predicting continuous alphabets in real time.</p>
           </div>
 
           <div class="alphabet-live-card">
-            <div class="live-card-badge">Current Sign</div>
-            <div class="big-alphabet-display" id="bigAlphaDisplay">?</div>
-            <div class="alphabet-desc" id="bigAlphaDesc">Make a sign with your hand in camera view</div>
+            <div class="live-card-badge">Active Sign</div>
+            <div class="big-alphabet-display font-mono" id="bigAlphaDisplay">-</div>
+            <div class="alphabet-desc" id="bigAlphaDesc">Position hand clearly within the camera frame</div>
             <div class="alphabet-actions">
               <button class="btn btn-primary" id="btnSpeakAlpha">
-                <span>🔊</span> Speak Alphabet
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                Speak Sign
               </button>
               <button class="btn btn-secondary" id="btnCopyAlpha">
-                <span>📋</span> Copy
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                Copy
               </button>
             </div>
           </div>
@@ -175,11 +202,11 @@
           <!-- Recent Alphabet History Stream -->
           <div class="history-section">
             <div class="section-title-row">
-              <h4>Recent Stream History</h4>
-              <button class="btn-link" id="btnClearAlphaHistory">Clear Stream</button>
+              <h4>Recognition Log</h4>
+              <button class="btn-link" id="btnClearAlphaHistory">Clear Log</button>
             </div>
-            <div class="history-chips-container" id="alphaHistoryContainer">
-              <span class="history-empty">Signs will appear here as you perform them...</span>
+            <div class="history-chips-container font-mono" id="alphaHistoryContainer">
+              <span class="history-empty">Signs will log here as you perform them...</span>
             </div>
           </div>
         </div>
@@ -188,18 +215,18 @@
         <div class="tab-pane" id="paneWord">
           <div class="pane-intro">
             <h3>Word Builder Mode</h3>
-            <p>Specify the number of alphabets in your target word. Make the symbol for each slot, confirm or click "Next Letter", and assemble the complete word.</p>
+            <p>Define the number of letters in your word. Perform each sign into the active slot, press Spacebar (or "Next Letter") to lock it, and construct the full word.</p>
           </div>
 
           <!-- Word Setup Form -->
           <div class="config-box" id="wordConfigBox">
-            <label class="form-label" for="numLettersInput">Enter Number of Alphabets in Word:</label>
+            <label class="form-label" for="numLettersInput">Word Length (Letters):</label>
             <div class="input-with-button">
-              <input type="number" id="numLettersInput" min="1" max="15" value="4" class="form-input">
-              <button class="btn btn-primary" id="btnInitWord">Set Word Length</button>
+              <input type="number" id="numLettersInput" min="1" max="15" value="4" class="form-input font-mono">
+              <button class="btn btn-primary" id="btnInitWord">Set Length</button>
             </div>
             <div class="quick-presets">
-              <span>Quick Presets:</span>
+              <span class="presets-label">Presets:</span>
               <button class="preset-pill" data-len="3">3 Letters</button>
               <button class="preset-pill" data-len="4">4 Letters</button>
               <button class="preset-pill" data-len="5">5 Letters</button>
@@ -210,29 +237,59 @@
           <!-- Interactive Slots Grid -->
           <div class="word-slots-section" id="wordSlotsSection">
             <div class="slots-header">
-              <span class="active-slot-indicator" id="activeSlotIndicator">Active: Slot 1 of 4</span>
-              <span class="shortcut-hint">Tip: Press <strong>Spacebar</strong> for Next Letter</span>
+              <span class="active-slot-indicator font-mono" id="activeSlotIndicator">Slot 1 of 4</span>
+              <span class="shortcut-hint">Press <strong>Spacebar</strong> to lock letter</span>
             </div>
-            <div class="slots-container" id="wordSlotsContainer">
+            <div class="slots-container font-mono" id="wordSlotsContainer">
               <!-- Dynamically populated letter slot cards -->
+            </div>
+
+            <!-- Smart Word Predictions Box -->
+            <div class="smart-suggestions-box" id="wordSuggestionsBox">
+              <div class="suggestions-header">
+                <span class="suggestions-title">
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                  Smart Word Suggestions
+                </span>
+                <span class="suggestions-hint" id="wordSuggestionsHint">Click any word to auto-fill</span>
+              </div>
+              <div class="suggestions-chips-row font-mono" id="wordSuggestionsRow">
+                <!-- Dynamically populated e.g. [ CAT ] [ CAB ] [ CAP ] [ CAN ] -->
+              </div>
             </div>
 
             <!-- Active Slot Interpreter HUD -->
             <div class="slot-interpreter-hud">
               <div class="interpreter-live-info">
-                <span class="hud-label">Currently Interpreting for Current Slot:</span>
-                <span class="hud-value" id="slotInterpretingVal">-</span>
-                <span class="hud-conf" id="slotInterpretingConf">(--%)</span>
+                <span class="hud-label">Live Sign for Slot:</span>
+                <span class="hud-value font-mono" id="slotInterpretingVal">-</span>
+                <span class="hud-conf font-mono" id="slotInterpretingConf">(--%)</span>
+              </div>
+
+              <!-- Hands-Free Auto-Confirm Hold Progress Bar -->
+              <div class="hold-confirm-bar-wrapper" id="wordHoldConfirmWrapper">
+                <div class="hold-confirm-label-row">
+                  <span class="hold-confirm-text" id="wordHoldConfirmText">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Hands-Free Auto-Confirm: Hold sign steadily
+                  </span>
+                  <span class="hold-confirm-timer font-mono" id="wordHoldConfirmTimer">0.0s / 1.2s</span>
+                </div>
+                <div class="hold-progress-track">
+                  <div class="hold-progress-bar" id="wordHoldProgressBar" style="width: 0%;"></div>
+                </div>
               </div>
               <div class="slot-action-buttons">
                 <button class="btn btn-primary btn-large" id="btnNextLetter">
-                  <span>➡️</span> Next Letter (Save Slot)
+                  Next Letter (Spacebar)
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
                 </button>
                 <button class="btn btn-secondary" id="btnPrevLetter">
-                  <span>⬅️</span> Previous Letter
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                  Previous
                 </button>
-                <button class="btn btn-danger-outline" id="btnResetWord">
-                  <span>🔄</span> Reset
+                <button class="btn btn-secondary" id="btnResetWord">
+                  Reset
                 </button>
               </div>
             </div>
@@ -240,20 +297,22 @@
 
           <!-- Assembled Word Result Card -->
           <div class="result-card" id="wordResultCard" style="display: none;">
-            <div class="result-header">🎉 Word Successfully Assembled!</div>
-            <div class="result-word" id="assembledWordDisplay">SIGN</div>
+            <div class="result-header">Word Assembled</div>
+            <div class="result-word font-mono" id="assembledWordDisplay">SIGN</div>
             <div class="result-actions">
               <button class="btn btn-primary" id="btnSpeakWord">
-                <span>🔊</span> Pronounce Word
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                Pronounce Word
               </button>
               <button class="btn btn-secondary" id="btnCopyWord">
-                <span>📋</span> Copy Word
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                Copy
               </button>
-              <button class="btn btn-accent" id="btnAddWordToSentence">
-                <span>💬</span> Send to Sentence Mode
+              <button class="btn btn-secondary" id="btnAddWordToSentence">
+                Send to Sentence Mode
               </button>
               <button class="btn btn-secondary" id="btnNewWord">
-                <span>✨</span> Build Another Word
+                Build Next Word
               </button>
             </div>
           </div>
@@ -263,18 +322,18 @@
         <div class="tab-pane" id="paneSentence">
           <div class="pane-intro">
             <h3>Sentence Builder Mode</h3>
-            <p>Construct complete sentences word-by-word. Specify the number of words, spell each word letter-by-letter with "Next Letter", and advance to the next word!</p>
+            <p>Construct complete sentences word-by-word. Spell each word letter-by-letter with "Next Letter", then advance to the next word to synthesize the full sentence.</p>
           </div>
 
           <!-- Sentence Setup Form -->
           <div class="config-box" id="sentenceConfigBox">
-            <label class="form-label" for="numWordsInput">Enter Number of Words in Sentence:</label>
+            <label class="form-label" for="numWordsInput">Word Count in Sentence:</label>
             <div class="input-with-button">
-              <input type="number" id="numWordsInput" min="1" max="10" value="3" class="form-input">
-              <button class="btn btn-primary" id="btnInitSentence">Initialize Sentence</button>
+              <input type="number" id="numWordsInput" min="1" max="10" value="3" class="form-input font-mono">
+              <button class="btn btn-primary" id="btnInitSentence">Initialize</button>
             </div>
             <div class="quick-presets">
-              <span>Quick Presets:</span>
+              <span class="presets-label">Presets:</span>
               <button class="preset-pill-sentence" data-words="2">2 Words</button>
               <button class="preset-pill-sentence" data-words="3">3 Words</button>
               <button class="preset-pill-sentence" data-words="4">4 Words</button>
@@ -284,37 +343,68 @@
           <!-- Sentence Workspace -->
           <div class="sentence-workspace" id="sentenceWorkspace" style="display: none;">
             <!-- Words Breadcrumb Bar -->
-            <div class="words-breadcrumb-bar" id="wordsBreadcrumbBar">
+            <div class="words-breadcrumb-bar font-mono" id="wordsBreadcrumbBar">
               <!-- Dynamically populated word pills -->
             </div>
 
             <!-- Active Word Letter Builder Card -->
             <div class="active-word-builder-card">
               <div class="builder-card-header">
-                <span id="activeWordTitle">Editing Word 1 of 3</span>
-                <span class="sub-badge" id="wordLetterCountBadge">Letters: 0</span>
+                <span id="activeWordTitle">Word 1 of 3</span>
+                <span class="sub-badge font-mono" id="wordLetterCountBadge">0 Letters</span>
               </div>
 
               <!-- Word Letter Slots -->
-              <div class="sentence-letter-slots" id="sentenceLetterSlots">
+              <div class="sentence-letter-slots font-mono" id="sentenceLetterSlots">
                 <!-- Dynamically generated letter slots for current word -->
+              </div>
+
+              <!-- Smart Sentence Word Predictions Box -->
+              <div class="smart-suggestions-box" id="sentenceSuggestionsBox">
+                <div class="suggestions-header">
+                  <span class="suggestions-title" id="sentenceSuggestionsTitle">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+                    Word Predictions
+                  </span>
+                  <span class="suggestions-hint">Tap to auto-insert into sentence</span>
+                </div>
+                <div class="suggestions-chips-row font-mono" id="sentenceSuggestionsRow">
+                  <!-- Dynamically populated e.g. [ HELLO ] [ HOW ] [ HELP ] -->
+                </div>
               </div>
 
               <!-- Current Letter Interpreting HUD -->
               <div class="slot-interpreter-hud">
                 <div class="interpreter-live-info">
-                  <span class="hud-label">Live Interpretation for Current Letter:</span>
-                  <span class="hud-value" id="sentenceInterpretingVal">-</span>
+                  <span class="hud-label">Current Letter:</span>
+                  <span class="hud-value font-mono" id="sentenceInterpretingVal">-</span>
+                </div>
+
+                <!-- Hands-Free Auto-Confirm Hold Progress Bar -->
+                <div class="hold-confirm-bar-wrapper" id="sentenceHoldConfirmWrapper">
+                  <div class="hold-confirm-label-row">
+                    <span class="hold-confirm-text" id="sentenceHoldConfirmText">
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      Hands-Free Auto-Confirm: Hold sign steadily
+                    </span>
+                    <span class="hold-confirm-timer font-mono" id="sentenceHoldConfirmTimer">0.0s / 1.2s</span>
+                  </div>
+                  <div class="hold-progress-track">
+                    <div class="hold-progress-bar" id="sentenceHoldProgressBar" style="width: 0%;"></div>
+                  </div>
                 </div>
                 <div class="slot-action-buttons">
                   <button class="btn btn-primary" id="btnSentenceNextLetter">
-                    <span>➡️</span> Next Letter
+                    Next Letter
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
                   </button>
                   <button class="btn btn-secondary" id="btnSentenceBackLetter">
-                    <span>⬅️</span> Back Letter
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                    Back
                   </button>
-                  <button class="btn btn-accent" id="btnCompleteWordNext">
-                    <span>✅</span> Complete Word & Next Word ➡️
+                  <button class="btn btn-primary" id="btnCompleteWordNext">
+                    Complete Word & Next
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
                   </button>
                 </div>
               </div>
@@ -323,21 +413,23 @@
             <!-- Live Full Sentence Display -->
             <div class="assembled-sentence-card">
               <div class="sentence-card-header">
-                <span>Assembled Sentence Output</span>
-                <span class="char-count" id="sentenceCharCount">0 characters</span>
+                <span>Assembled Sentence</span>
+                <span class="char-count font-mono" id="sentenceCharCount">0 characters</span>
               </div>
               <div class="full-sentence-box" id="fullSentenceDisplay">
-                Your sentence will appear here as words are completed...
+                Sentence output will assemble here...
               </div>
               <div class="sentence-action-row">
                 <button class="btn btn-primary" id="btnSpeakSentence">
-                  <span>🔊</span> Speak Sentence
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                  Speak Sentence
                 </button>
                 <button class="btn btn-secondary" id="btnCopySentence">
-                  <span>📋</span> Copy Sentence
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  Copy
                 </button>
-                <button class="btn btn-danger-outline" id="btnResetSentence">
-                  <span>🔄</span> Reset Sentence
+                <button class="btn btn-secondary" id="btnResetSentence">
+                  Reset
                 </button>
               </div>
             </div>
@@ -351,20 +443,20 @@
       <div class="modal-window">
         <div class="modal-header">
           <div class="modal-title">
-            <span>📖</span> Indian Sign Language (ISL) Alphabet Reference Guide
+            Indian Sign Language (ISL) Alphabet Reference
           </div>
           <button class="btn-close" id="btnCloseGuide">&times;</button>
         </div>
         <div class="modal-body">
           <p class="modal-info">
-            ISL features both 1-handed and 2-handed alphabet gestures. Use the reference cards below to review the official signs for A through Z.
+            ISL features both 1-handed and 2-handed alphabet gestures. Refer to the postures below for standard signs A through Z.
           </p>
-          <div class="guide-grid" id="guideGrid">
+          <div class="guide-grid font-mono" id="guideGrid">
             <!-- Dynamically populated from /api/reference -->
           </div>
         </div>
         <div class="modal-footer">
-          <button class="btn btn-primary" id="btnCloseGuideBtn">Got it, close guide</button>
+          <button class="btn btn-primary" id="btnCloseGuideBtn">Close Reference</button>
         </div>
       </div>
     </div>
@@ -373,4 +465,3 @@
   <script src="/static/app.js"></script>
 </body>
 </html>
-

@@ -34,7 +34,7 @@ def main():
     print("\n[Server] Starting FastAPI Uvicorn Server on http://127.0.0.1:8000 ...")
     print("[Server] Press Ctrl+C in this terminal to stop.\n")
     
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=False, log_level="info")
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True, log_level="info")
 
 if __name__ == "__main__":
     main()

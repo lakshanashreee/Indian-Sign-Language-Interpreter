@@ -124,11 +124,12 @@ class ISLModelService:
         self.detector = None
         self.ensemble_clf = None
         self.classes = [chr(c) for c in range(65, 91)]  # A to Z
-        self.accuracy = 0.9909
+        self.accuracy = 0.9655
         
-        # Temporal smoothing buffer (FIFO)
-        self.history = deque(maxlen=5)
+        # Temporal smoothing buffer (FIFO - fast 3-frame window)
+        self.history = deque(maxlen=3)
         self.no_hand_counter = 0
+        self.frame_timestamp_ms = 0
         
         self._load_models()
         self._load_hand_detector()
@@ -139,7 +140,16 @@ class ISLModelService:
             self.ensemble_clf = data['classifier']
             self.classes = data.get('classes', self.classes)
             self.accuracy = data.get('accuracy', 0.9909)
-            print(f"[ISLModelService] Loaded 99.1% Master Ensemble Model ({len(self.classes)} classes)")
+            
+            # Ultra-fast single-sample inference optimization (eliminates thread pool spawn overhead)
+            try:
+                if hasattr(self.ensemble_clf, 'named_estimators_'):
+                    et = self.ensemble_clf.named_estimators_.get('et')
+                    if et is not None:
+                        et.n_jobs = 1
+            except Exception:
+                pass
+            print(f"[ISLModelService] Loaded Ultra-Fast Master Ensemble Model ({len(self.classes)} classes)")
         else:
             print(f"[ISLModelService] Warning: {self.landmark_model_path} not found.")
 
@@ -153,11 +163,11 @@ class ISLModelService:
             options = vision.HandLandmarkerOptions(
                 base_options=base_options,
                 num_hands=2,
-                min_hand_detection_confidence=0.25,
-                min_tracking_confidence=0.25
+                min_hand_detection_confidence=0.15,
+                min_tracking_confidence=0.15
             )
             self.detector = vision.HandLandmarker.create_from_options(options)
-            print("[ISLModelService] MediaPipe HandLandmarker initialized.")
+            print("[ISLModelService] MediaPipe HandLandmarker initialized (Reliable High-Sensitivity Mode).")
         except Exception as e:
             print(f"[ISLModelService] MediaPipe init error: {e}")
             self.detector = None
@@ -165,10 +175,9 @@ class ISLModelService:
     def predict_sign(self, frame_bgr, use_roi_fallback=False):
         """
         Main recognition pipeline:
-        1. MediaPipe isolates hands from body and face.
-        2. If NO HAND is detected, return None / idle (Zero false positives).
-        3. If HAND IS DETECTED, compute 179 precision features (handedness-ordered).
-        4. Infer class with soft-voting ensemble and temporal majority smoothing.
+        1. MediaPipe isolates hands from body and face with high sensitivity.
+        2. Zero false positives when no hands are in view.
+        3. Fast 179-D feature extraction with soft voting ensemble.
         """
         h, w = frame_bgr.shape[:2]
         landmarks_list = []
@@ -210,13 +219,30 @@ class ISLModelService:
                         x2 = min(w, max_x + pad_x)
                         y2 = min(h, max_y + pad_y)
                         
-                        hand_crop = frame_bgr[y1:y2, x1:x2].copy()
-                        bbox = {"x1": x1, "y1": y1, "x2": x2, "y2": y2, "w": x2 - x1, "h": y2 - y1}
+                        bbox = {
+                            "x1": x1,
+                            "y1": y1,
+                            "x2": x2,
+                            "y2": y2,
+                            "w": x2 - x1,
+                            "h": y2 - y1,
+                            "norm_x1": round(x1 / w, 4),
+                            "norm_y1": round(y1 / h, 4),
+                            "norm_x2": round(x2 / w, 4),
+                            "norm_y2": round(y2 / h, 4),
+                            "norm_w": round((x2 - x1) / w, 4),
+                            "norm_h": round((y2 - y1) / h, 4)
+                        }
                         
-                        # Thumbnail
-                        crop_thumb = cv2.resize(hand_crop, (120, 120))
-                        _, buf = cv2.imencode('.jpg', crop_thumb, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
-                        crop_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode('utf-8')
+                        # Lightweight thumbnail for preview (optimized for speed)
+                        try:
+                            hand_crop = frame_bgr[y1:y2, x1:x2]
+                            if hand_crop.size > 0:
+                                crop_thumb = cv2.resize(hand_crop, (96, 96))
+                                _, buf = cv2.imencode('.jpg', crop_thumb, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+                                crop_b64 = "data:image/jpeg;base64," + base64.b64encode(buf).decode('utf-8')
+                        except Exception:
+                            pass
             except Exception as e:
                 print(f"[predict_sign] MediaPipe error: {e}")
 
@@ -282,17 +308,16 @@ class ISLModelService:
                 "hand_crop_base64": crop_b64
             }
 
-        # 6. Temporal Smoothing
-        self.history.append(raw_letter)
-        if len(self.history) >= 3:
-            counts = Counter(self.history)
-            most_common_letter, count = counts.most_common(1)[0]
-            if count >= len(self.history) * 0.45:
-                smoothed_letter = most_common_letter
-            else:
-                smoothed_letter = raw_letter
-        else:
+        # 6. Spontaneous Zero-Lag Response for Confident Signs
+        if confidence >= 0.70:
             smoothed_letter = raw_letter
+            self.history.clear()
+            self.history.append(raw_letter)
+        else:
+            self.history.append(raw_letter)
+            counts = Counter(self.history)
+            most_common_letter, _ = counts.most_common(1)[0]
+            smoothed_letter = most_common_letter
 
         return {
             "hand_detected": True,
